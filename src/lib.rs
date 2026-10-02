@@ -69,9 +69,21 @@ pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
     if patterns.is_empty() {
         bail!("At least one pattern is required");
     }
+    if is_drive_relative_path(&root.to_string_lossy()) {
+        bail!(
+            "Drive-relative root paths are not supported: {}",
+            root.display()
+        );
+    }
 
     let root = std::fs::canonicalize(root)
         .with_context(|| format!("Failed to resolve root directory: {}", root.display()))?;
+    if is_filesystem_root(&root) {
+        bail!(
+            "Filesystem roots cannot be used as processing roots: {}",
+            root.display()
+        );
+    }
     if !root.is_dir() {
         bail!("Root path is not a directory: {}", root.display());
     }
@@ -202,6 +214,10 @@ fn compile_patterns(root: &Path, patterns: &[String]) -> Result<(GlobSet, Vec<Pa
 
 /// 絶対パターンをルート相対へ変換し、ルート外の指定を拒否します。
 fn normalize_pattern(root_text: &str, pattern: &str) -> Result<String> {
+    if is_drive_relative_path(pattern) {
+        bail!("Drive-relative patterns are not supported: {pattern}");
+    }
+
     let normalized = normalize_absolute_for_match(pattern);
     let root_text = normalize_absolute_for_match(root_text);
 
@@ -219,7 +235,7 @@ fn normalize_pattern(root_text: &str, pattern: &str) -> Result<String> {
                 root_matches(prefix) && normalized[boundary_root.len()..].starts_with('/')
             });
         if !is_within_root {
-            bail!("Absolute pattern is outside the current root: {pattern}");
+            bail!("Absolute pattern is outside the processing root: {pattern}");
         }
         let relative = normalized[boundary_root.len()..].trim_start_matches('/');
         Ok(relative.to_owned())
@@ -284,6 +300,21 @@ fn is_absolute_pattern(pattern: &str) -> bool {
                         .is_some_and(|separator| matches!(separator, b'/' | b'\\')))))
 }
 
+fn is_drive_relative_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    cfg!(windows)
+        && bytes.first().is_some_and(u8::is_ascii_alphabetic)
+        && bytes.get(1) == Some(&b':')
+        && !bytes
+            .get(2)
+            .is_some_and(|separator| matches!(separator, b'/' | b'\\'))
+}
+
+fn is_filesystem_root(path: &Path) -> bool {
+    path.components()
+        .all(|component| !matches!(component, Component::Normal(_)))
+}
+
 /// 相対パスをプラットフォームに依存しない `/` 区切りの表示形式にします。
 fn display_path(path: &Path) -> String {
     path.components()
@@ -297,8 +328,43 @@ fn display_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ItemType, build_plan};
+    use super::{
+        ItemType, build_plan, is_drive_relative_path, is_filesystem_root, normalize_pattern,
+    };
     use assert_fs::prelude::*;
+    use std::path::Path;
+
+    #[test]
+    fn identifies_filesystem_root_paths() {
+        assert!(is_filesystem_root(Path::new("/")));
+
+        #[cfg(windows)]
+        {
+            assert!(is_filesystem_root(Path::new("C:\\")));
+            assert!(is_filesystem_root(Path::new("\\\\server\\share\\")));
+            assert!(!is_filesystem_root(Path::new("C:\\folder")));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rejects_drive_relative_roots_and_patterns() {
+        assert!(is_drive_relative_path("C:folder"));
+        assert!(!is_drive_relative_path("C:\\folder"));
+        assert!(!is_drive_relative_path("\\\\server\\share\\folder"));
+
+        let root_error = build_plan(Path::new("C:folder"), &["*".to_owned()]).unwrap_err();
+        assert!(root_error.to_string().contains("Drive-relative root"));
+
+        let pattern_error = normalize_pattern("C:/root", "C:folder").unwrap_err();
+        assert!(pattern_error.to_string().contains("Drive-relative pattern"));
+    }
+
+    #[test]
+    fn rejects_filesystem_root_before_walking_it() {
+        let error = build_plan(Path::new("/"), &["*".to_owned()]).unwrap_err();
+        assert!(error.to_string().contains("Filesystem roots"));
+    }
 
     #[test]
     fn keeps_matching_item_and_its_ancestors() {
@@ -424,7 +490,7 @@ mod tests {
 
         let error = build_plan(temp.path(), &[outside_pattern]).unwrap_err();
 
-        assert!(error.to_string().contains("outside the current root"));
+        assert!(error.to_string().contains("outside the processing root"));
     }
 
     #[test]
@@ -457,6 +523,6 @@ mod tests {
 
         let error = build_plan(temp.path(), &["/outside/*".to_owned()]).unwrap_err();
 
-        assert!(error.to_string().contains("outside the current root"));
+        assert!(error.to_string().contains("outside the processing root"));
     }
 }

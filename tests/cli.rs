@@ -27,6 +27,205 @@ fn dry_run_lists_items_without_removing_them() {
 }
 
 #[test]
+fn relative_root_is_resolved_from_starting_directory() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("target/keep.txt").write_str("keep").unwrap();
+    temp.child("target/remove.txt").write_str("remove").unwrap();
+    temp.child("outside.txt").write_str("outside").unwrap();
+    let canonical_root = std::fs::canonicalize(temp.path().join("target")).unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--root", "target", "keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let output = String::from_utf8_lossy(&output);
+    assert!(output.contains(&format!("Root: {}", canonical_root.display())));
+    assert!(output.contains("keep.txt"));
+    assert!(output.contains("remove.txt"));
+    assert!(!output.contains("outside.txt"));
+    temp.child("target/remove.txt").assert("remove");
+    temp.child("outside.txt").assert("outside");
+}
+
+#[test]
+fn absolute_root_is_accepted() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("target/keep.txt").write_str("keep").unwrap();
+    temp.child("target/remove.txt").write_str("remove").unwrap();
+    let root = std::fs::canonicalize(temp.path().join("target")).unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--root", root.to_str().unwrap(), "keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    assert!(String::from_utf8_lossy(&output).contains("Items to delete (1):"));
+}
+
+#[test]
+fn absolute_keep_pattern_is_relative_to_selected_root_boundary() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("target/keep.txt").write_str("keep").unwrap();
+    temp.child("target/remove.txt").write_str("remove").unwrap();
+    temp.child("target-sibling/outside.txt")
+        .write_str("outside")
+        .unwrap();
+    let selected_root = std::fs::canonicalize(temp.path().join("target")).unwrap();
+    let keep_pattern = selected_root
+        .join("keep.txt")
+        .to_string_lossy()
+        .into_owned();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--dry-run",
+            "--root",
+            selected_root.to_str().unwrap(),
+            &keep_pattern,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    assert!(String::from_utf8_lossy(&output).contains("Items to delete (1):"));
+
+    let outside_pattern = temp
+        .path()
+        .join("target-sibling/*")
+        .to_string_lossy()
+        .into_owned();
+    let stderr = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--dry-run",
+            "--root",
+            selected_root.to_str().unwrap(),
+            &outside_pattern,
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    assert!(String::from_utf8_lossy(&stderr).contains("outside the processing root"));
+}
+
+#[test]
+fn force_with_root_preserves_selected_root_and_siblings() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("target/keep.txt").write_str("keep").unwrap();
+    temp.child("target/remove.txt").write_str("remove").unwrap();
+    temp.child("outside.txt").write_str("outside").unwrap();
+    let root = temp.path().join("target");
+
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--root", "target", "keep.txt"])
+        .assert()
+        .success();
+
+    assert!(root.is_dir());
+    temp.child("target/keep.txt").assert("keep");
+    assert!(!root.join("remove.txt").exists());
+    temp.child("outside.txt").assert("outside");
+}
+
+#[test]
+fn filesystem_root_is_rejected_even_with_force() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let filesystem_root = temp.path().ancestors().last().unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--force",
+            "--root",
+            filesystem_root.to_str().unwrap(),
+            "keep-nothing",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+
+    assert!(String::from_utf8_lossy(&output).contains("Filesystem roots"));
+}
+
+#[test]
+fn root_symlink_processes_and_displays_its_canonical_target() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("target/keep.txt").write_str("keep").unwrap();
+    temp.child("target/remove.txt").write_str("remove").unwrap();
+    let target = temp.path().join("target");
+    let link = temp.path().join("target-link");
+
+    #[cfg(unix)]
+    let link_result = std::os::unix::fs::symlink(&target, &link);
+    #[cfg(windows)]
+    let link_result = std::os::windows::fs::symlink_dir(&target, &link);
+
+    if link_result.is_err() {
+        eprintln!("Skipping root symlink test because symlink creation is unavailable");
+        return;
+    }
+
+    let canonical_target = std::fs::canonicalize(&target).unwrap();
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--root", "target-link", "keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let output = String::from_utf8_lossy(&output);
+    assert!(output.contains(&format!("Root: {}", canonical_target.display())));
+    assert!(output.contains("remove.txt"));
+    temp.child("target/remove.txt").assert("remove");
+}
+
+#[test]
+fn no_match_warning_names_selected_root() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("target/remove.txt").write_str("remove").unwrap();
+    let canonical_root = std::fs::canonicalize(temp.path().join("target")).unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--root", "target", "missing"])
+        .assert()
+        .success()
+        .get_output()
+        .stderr
+        .clone();
+
+    assert!(String::from_utf8_lossy(&output).contains(&canonical_root.display().to_string()));
+    temp.child("target/remove.txt").assert("remove");
+}
+
+#[test]
 fn default_display_groups_directories_and_marks_kept_parents_without_root_tags() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();

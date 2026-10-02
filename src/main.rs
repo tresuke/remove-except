@@ -3,9 +3,9 @@
 use std::cmp::Ordering;
 use std::fs;
 use std::io::{self, BufWriter, IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use console::style;
 use dialoguer::Confirm;
@@ -14,9 +14,16 @@ use remove_except::{ItemType, PlannedItem, build_plan};
 #[derive(Debug, Parser)]
 #[command(
     version,
-    about = "Keep items matching any pattern and remove the rest under the current directory"
+    about = "Keep items matching any pattern and remove the rest under the selected root"
 )]
 struct Args {
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Directory to process (defaults to the current directory)"
+    )]
+    root: Option<PathBuf>,
+
     #[arg(
         short = 'n',
         long,
@@ -57,11 +64,13 @@ struct PlanDisplayOptions {
 fn main() -> Result<()> {
     let args = Args::parse();
     let current_dir = std::env::current_dir().context("Failed to get current directory")?;
-    let plan = build_plan(&current_dir, &args.patterns)?;
+    let root = resolve_root(&current_dir, args.root)?;
+    let plan = build_plan(&root, &args.patterns)?;
 
     if plan.direct_match_count == 0 {
         eprintln!(
-            "WARNING: No items matched the keep patterns. Everything under the current directory would be removed."
+            "WARNING: No items matched the keep patterns. Everything under {} would be removed.",
+            plan.root.display()
         );
     }
 
@@ -90,6 +99,36 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn resolve_root(current_dir: &Path, root: Option<PathBuf>) -> Result<PathBuf> {
+    let Some(root) = root else {
+        return Ok(current_dir.to_path_buf());
+    };
+
+    if is_drive_relative_path(&root) {
+        bail!(
+            "Drive-relative root paths are not supported: {}",
+            root.display()
+        );
+    }
+
+    if root.is_absolute() {
+        Ok(root)
+    } else {
+        Ok(current_dir.join(root))
+    }
+}
+
+fn is_drive_relative_path(path: &Path) -> bool {
+    let path = path.as_os_str().to_string_lossy();
+    let bytes = path.as_bytes();
+    cfg!(windows)
+        && bytes.first().is_some_and(u8::is_ascii_alphabetic)
+        && bytes.get(1) == Some(&b':')
+        && !bytes
+            .get(2)
+            .is_some_and(|separator| matches!(separator, b'/' | b'\\'))
 }
 
 fn confirm_deletion(has_summaries: bool) -> Result<bool> {
