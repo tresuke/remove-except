@@ -278,8 +278,107 @@ fn flat_option_displays_relative_paths_instead_of_a_tree() {
 
     let output = String::from_utf8_lossy(&output);
     assert!(output.contains("RelativePath"));
+    assert!(
+        output
+            .lines()
+            .any(|line| { line.contains("Directory") && line.ends_with("nested/") })
+    );
     assert!(output.contains("nested/remove.txt"));
+    assert!(
+        output.contains(
+            "Legend: blue directory, cyan symlink; without color: / directory, @ symlink"
+        )
+    );
     assert!(!output.contains("└──"));
+    assert!(!output.contains('\u{1b}'));
+}
+
+#[test]
+fn flat_type_sort_groups_types_and_sorts_paths_within_each_type() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("0-file.txt").write_str("remove").unwrap();
+    temp.child("y-file.txt").write_str("remove").unwrap();
+    temp.child("x-file.txt").write_str("remove").unwrap();
+    temp.child("z-dir/remove.txt").write_str("remove").unwrap();
+
+    let default_output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--flat", "keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let default_output = String::from_utf8_lossy(&default_output);
+    assert!(default_output.find("0-file.txt").unwrap() < default_output.find("z-dir/").unwrap());
+
+    let sorted_output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--flat", "--sort-by-type", "keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let sorted_output = String::from_utf8_lossy(&sorted_output);
+    let delete_section = sorted_output.split("Items to delete").nth(1).unwrap();
+    assert!(delete_section.find("Directory").unwrap() < delete_section.find("File").unwrap());
+    assert!(
+        delete_section.find("x-file.txt").unwrap() < delete_section.find("y-file.txt").unwrap()
+    );
+    assert!(
+        delete_section.find("y-file.txt").unwrap()
+            < delete_section.find("z-dir/remove.txt").unwrap()
+    );
+}
+
+#[test]
+fn flat_type_sort_places_symlinks_after_files() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("z-file.txt").write_str("remove").unwrap();
+    let target = temp.path().join("keep.txt");
+    let link = temp.path().join("a-link");
+
+    #[cfg(unix)]
+    let link_result = std::os::unix::fs::symlink(&target, &link);
+    #[cfg(windows)]
+    let link_result = std::os::windows::fs::symlink_file(&target, &link);
+
+    if link_result.is_err() {
+        eprintln!("Skipping flat symlink sort test because symlink creation is unavailable");
+        return;
+    }
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--flat", "--sort-by-type", "keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8_lossy(&output);
+    let delete_section = output.split("Items to delete").nth(1).unwrap();
+    assert!(delete_section.find("File").unwrap() < delete_section.find("Symlink").unwrap());
+    assert!(delete_section.contains("a-link@"));
+}
+
+#[test]
+fn flat_type_sort_requires_flat_option() {
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .args(["--dry-run", "--sort-by-type", "keep.txt"])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    assert!(String::from_utf8_lossy(&output).contains("--flat"));
 }
 
 #[test]

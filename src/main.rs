@@ -47,6 +47,13 @@ struct Args {
     flat: bool,
 
     #[arg(
+        long,
+        requires = "flat",
+        help = "Sort flat output by item type, then relative path"
+    )]
+    sort_by_type: bool,
+
+    #[arg(
         required = true,
         num_args = 1..,
         help = "Paths or glob patterns to keep (* matches one level, ** recurses); any match keeps an item"
@@ -56,6 +63,7 @@ struct Args {
 
 struct PlanDisplayOptions {
     flat: bool,
+    sort_by_type: bool,
     direct_match_count: usize,
     delete_root_count: usize,
     colors_enabled: bool,
@@ -83,6 +91,7 @@ fn main() -> Result<()> {
         keep_summary,
         delete_summary,
         args.flat,
+        args.sort_by_type,
     )?;
 
     if args.dry_run || plan.delete_roots.is_empty() {
@@ -163,6 +172,7 @@ fn print_plan(
     keep_summary: bool,
     delete_summary: bool,
     flat: bool,
+    sort_by_type: bool,
 ) -> io::Result<()> {
     let stdout = io::stdout();
     let mut output = BufWriter::new(stdout.lock());
@@ -180,18 +190,20 @@ fn print_plan(
     writeln!(output, "Deletion plan: {mode}")?;
     writeln!(output, "Root: {}", plan.root.display())?;
     writeln!(output)?;
-    if !flat
-        && ((!keep_summary && !plan.keep_items.is_empty())
-            || (!delete_summary && !plan.delete_items.is_empty()))
+    if (!keep_summary && !plan.keep_items.is_empty())
+        || (!delete_summary && !plan.delete_items.is_empty())
     {
-        writeln!(
-            output,
+        let legend = if flat {
+            "Legend: blue directory, cyan symlink; without color: / directory, @ symlink"
+        } else {
             "Legend: blue directory, cyan symlink, green kept parent; without color: / directory, @ symlink, + kept parent"
-        )?;
+        };
+        writeln!(output, "{legend}")?;
         writeln!(output)?;
     }
     let options = PlanDisplayOptions {
         flat,
+        sort_by_type,
         direct_match_count: plan.direct_match_count,
         delete_root_count: plan.delete_roots.len(),
         colors_enabled,
@@ -270,12 +282,27 @@ fn print_item_section(
     if options.flat {
         writeln!(output, "{:<12}  RelativePath", "ItemType")?;
         writeln!(output, "{:-<12}  {:-<12}", "", "")?;
-        for item in items {
+        let mut ordered_items: Vec<_> = items.iter().collect();
+        if options.sort_by_type {
+            ordered_items.sort_unstable_by(|left, right| {
+                flat_item_type_rank(left.item_type)
+                    .cmp(&flat_item_type_rank(right.item_type))
+                    .then_with(|| left.relative_path.cmp(&right.relative_path))
+            });
+        }
+        for item in ordered_items {
+            let item_type = format!("{:<12}", item_type_name(item.item_type));
+            let suffix = if options.colors_enabled {
+                ""
+            } else {
+                tree_item_suffix(item.item_type)
+            };
+            let relative_path = format!("{}{suffix}", item.relative_path);
             writeln!(
                 output,
-                "{:<12}  {}",
-                item_type_name(item.item_type),
-                item.relative_path
+                "{}  {}",
+                style_flat_item(&item_type, item.item_type, options.colors_enabled),
+                style_flat_item(&relative_path, item.item_type, options.colors_enabled)
             )?;
         }
     } else {
@@ -396,6 +423,26 @@ fn item_type_name(item_type: ItemType) -> &'static str {
     }
 }
 
+fn flat_item_type_rank(item_type: ItemType) -> u8 {
+    match item_type {
+        ItemType::Directory => 0,
+        ItemType::File => 1,
+        ItemType::Symlink => 2,
+    }
+}
+
+fn style_flat_item(text: &str, item_type: ItemType, colors_enabled: bool) -> String {
+    if !colors_enabled {
+        return text.to_owned();
+    }
+
+    match item_type {
+        ItemType::Directory => style(text).blue().bold().to_string(),
+        ItemType::File => text.to_owned(),
+        ItemType::Symlink => style(text).cyan().bold().to_string(),
+    }
+}
+
 fn tree_item_suffix(item_type: ItemType) -> &'static str {
     match item_type {
         ItemType::Directory => "/",
@@ -427,7 +474,7 @@ fn remove_file_or_directory_link(path: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::tree_item_suffix;
+    use super::{flat_item_type_rank, style_flat_item, tree_item_suffix};
     use remove_except::ItemType;
 
     #[test]
@@ -435,5 +482,26 @@ mod tests {
         assert_eq!(tree_item_suffix(ItemType::Directory), "/");
         assert_eq!(tree_item_suffix(ItemType::File), "");
         assert_eq!(tree_item_suffix(ItemType::Symlink), "@");
+    }
+
+    #[test]
+    fn flat_item_type_rank_orders_directories_files_and_symlinks() {
+        assert!(flat_item_type_rank(ItemType::Directory) < flat_item_type_rank(ItemType::File));
+        assert!(flat_item_type_rank(ItemType::File) < flat_item_type_rank(ItemType::Symlink));
+    }
+
+    #[test]
+    fn flat_item_styles_directories_and_symlinks_but_not_files() {
+        let colors_were_enabled = console::colors_enabled();
+        console::set_colors_enabled(true);
+
+        let directory = style_flat_item("Directory", ItemType::Directory, true);
+        let file = style_flat_item("File", ItemType::File, true);
+        let symlink = style_flat_item("Symlink", ItemType::Symlink, true);
+
+        console::set_colors_enabled(colors_were_enabled);
+        assert!(directory.contains("34m"));
+        assert_eq!(file, "File");
+        assert!(symlink.contains("36m"));
     }
 }
