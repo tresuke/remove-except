@@ -417,6 +417,7 @@ dependencies = [
  "assert_cmd",
  "assert_fs",
  "clap",
+ "console",
  "dialoguer",
  "globset",
  "walkdir",

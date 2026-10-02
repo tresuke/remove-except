@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+console = "0.16"
 dialoguer = "0.12"
 globset = "0.4"
 walkdir = "2"
