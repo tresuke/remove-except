@@ -23,11 +23,32 @@ foreach ($relativePath in $fixtures.Keys) {
     [System.IO.File]::WriteAllText($filePath, $fixtures[$relativePath] + [Environment]::NewLine, $utf8)
 }
 
+ $linkPath = Join-Path $workspace 'keep-link'
+ $linkTarget = Join-Path $workspace 'keep.txt'
+ $existingLink = Get-Item -LiteralPath $linkPath -Force -ErrorAction SilentlyContinue
+ if ($null -ne $existingLink) {
+    if (
+        $existingLink.LinkType -ne 'SymbolicLink' -or
+        [System.IO.Path]::GetFullPath([string] $existingLink.Target) -ine $linkTarget
+    ) {
+        throw "Cannot refresh the symbolic-link fixture because '$linkPath' is not the expected link to '$linkTarget'."
+    }
+
+    Remove-Item -LiteralPath $linkPath -Force -ErrorAction Stop
+ }
+
+ try {
+    New-Item -ItemType SymbolicLink -Path $linkPath -Target $linkTarget -ErrorAction Stop | Out-Null
+ } catch {
+    throw "Failed to create the symbolic-link fixture '$linkPath'. On Windows, enable Developer Mode or run PowerShell elevated. $($_.Exception.Message)"
+ }
+
 $instructions = @'
 Manual test workspace
 
 This folder is disposable. Re-run Prepare-Manual-Test.ps1 to restore the generated files.
-The generator overwrites only its known fixture files and does not remove other files.
+The generator overwrites only its known fixture files, refreshes the known keep-link to keep.txt, and does not remove other files.
+keep-link is a symbolic link to keep.txt. On Windows, creating it may require Developer Mode or an elevated PowerShell session.
 
 From this directory, preview the result:
   cargo run --manifest-path ..\Cargo.toml -- --dry-run keep.txt keep *.md
