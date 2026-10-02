@@ -1,0 +1,15 @@
+[package]
+name = "remove-except"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+dialoguer = "0.12"
+globset = "0.4"
+walkdir = "2"
+
+[dev-dependencies]
+assert_cmd = "2"
+assert_fs = "1"
