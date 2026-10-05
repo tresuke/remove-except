@@ -6,15 +6,24 @@ use std::io::{self, BufWriter, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use clap::Parser;
+use clap::builder::styling::{AnsiColor, Styles};
+use clap::{CommandFactory, Parser, ValueEnum};
 use console::style;
 use dialoguer::Confirm;
 use remove_except::{ItemType, PlannedItem, build_plan};
 
+const HELP_STYLES: Styles = Styles::styled()
+    .header(AnsiColor::Cyan.on_default().bold())
+    .usage(AnsiColor::Cyan.on_default().bold())
+    .literal(AnsiColor::Green.on_default().bold())
+    .placeholder(AnsiColor::Yellow.on_default());
+
 #[derive(Debug, Parser)]
 #[command(
     version,
-    about = "Keep items matching any pattern and remove the rest under the selected root"
+    about = "Keep matching items and remove the rest under a processing root",
+    long_about = "Keep items matching one or more paths or glob patterns and remove the rest under the selected root. Multiple patterns are combined with OR. Always review the plan before deleting items.",
+    styles = HELP_STYLES
 )]
 struct Args {
     #[arg(
@@ -34,31 +43,49 @@ struct Args {
     #[arg(short = 'f', long, help = "Delete without the confirmation prompt")]
     force: bool,
 
-    #[arg(long, help = "Show summaries instead of both item lists")]
-    summary_only: bool,
-
-    #[arg(long, help = "Show a summary instead of the keep item list")]
-    keep_summary: bool,
-
-    #[arg(long, help = "Show a summary instead of the delete item list")]
-    delete_summary: bool,
-
-    #[arg(long, help = "Show flat path lists instead of the default tree view")]
-    flat: bool,
+    #[arg(
+        long,
+        value_enum,
+        value_name = "SECTION",
+        help = "Summarize paths in SECTION: keep, delete, or both"
+    )]
+    summary: Option<SummarySection>,
 
     #[arg(
         long,
-        requires = "flat",
-        help = "Sort flat output by item type, then relative path"
+        value_enum,
+        value_name = "LAYOUT",
+        default_value = "tree",
+        help = "Display paths as a tree or a flat list"
+    )]
+    layout: Layout,
+
+    #[arg(
+        long,
+        help = "Sort flat output by item type, then relative path (requires --layout flat)"
     )]
     sort_by_type: bool,
 
     #[arg(
         required = true,
         num_args = 1..,
+        value_name = "KEEP_PATTERN",
         help = "Paths or glob patterns to keep (* matches one level, ** recurses); any match keeps an item"
     )]
     patterns: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum Layout {
+    Tree,
+    Flat,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum SummarySection {
+    Keep,
+    Delete,
+    Both,
 }
 
 struct PlanDisplayOptions {
@@ -71,6 +98,14 @@ struct PlanDisplayOptions {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if args.sort_by_type && args.layout != Layout::Flat {
+        Args::command()
+            .error(
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "--sort-by-type requires --layout flat",
+            )
+            .exit();
+    }
     let current_dir = std::env::current_dir().context("Failed to get current directory")?;
     let root = resolve_root(&current_dir, args.root)?;
     let plan = build_plan(&root, &args.patterns)?;
@@ -82,15 +117,19 @@ fn main() -> Result<()> {
         );
     }
 
-    let keep_summary = args.summary_only || args.keep_summary;
-    let delete_summary = args.summary_only || args.delete_summary;
+    let (keep_summary, delete_summary) = match args.summary {
+        Some(SummarySection::Keep) => (true, false),
+        Some(SummarySection::Delete) => (false, true),
+        Some(SummarySection::Both) => (true, true),
+        None => (false, false),
+    };
     print_plan(
         &plan,
         args.dry_run,
         args.force,
         keep_summary,
         delete_summary,
-        args.flat,
+        args.layout == Layout::Flat,
         args.sort_by_type,
     )?;
 
@@ -107,6 +146,7 @@ fn main() -> Result<()> {
         remove_item(item).with_context(|| format!("Failed to remove {}", item.path.display()))?;
     }
 
+    println!("Removal complete.");
     Ok(())
 }
 
@@ -155,8 +195,11 @@ fn confirm_deletion(has_summaries: bool) -> Result<bool> {
             .context("Failed to read confirmation");
     }
 
-    print!("{prompt} [y/N] ");
-    io::stdout().flush()?;
+    let stderr = io::stderr();
+    let mut prompt_output = stderr.lock();
+    write!(prompt_output, "{prompt} [y/N] ")?;
+    prompt_output.flush()?;
+    drop(prompt_output);
     let mut answer = String::new();
     io::stdin().read_line(&mut answer)?;
     Ok(matches!(
@@ -174,10 +217,35 @@ fn print_plan(
     flat: bool,
     sort_by_type: bool,
 ) -> io::Result<()> {
-    let stdout = io::stdout();
-    let mut output = BufWriter::new(stdout.lock());
     let colors_enabled = io::stdout().is_terminal() && console::colors_enabled();
-    let mode = if dry_run {
+    let mut output = BufWriter::new(io::stdout().lock());
+    render_plan(
+        &mut output,
+        plan,
+        dry_run,
+        force,
+        keep_summary,
+        delete_summary,
+        flat,
+        sort_by_type,
+        colors_enabled,
+    )?;
+    output.flush()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_plan(
+    mut output: &mut impl Write,
+    plan: &remove_except::RemovalPlan,
+    dry_run: bool,
+    force: bool,
+    keep_summary: bool,
+    delete_summary: bool,
+    flat: bool,
+    sort_by_type: bool,
+    colors_enabled: bool,
+) -> io::Result<()> {
+    let mode_text = if dry_run {
         "PREVIEW ONLY - nothing will be removed"
     } else if plan.delete_roots.is_empty() {
         "No removal operations are needed"
@@ -186,8 +254,26 @@ fn print_plan(
     } else {
         "DELETION AFTER CONFIRMATION"
     };
+    let mode = if colors_enabled {
+        if dry_run {
+            style(mode_text).cyan().bold().to_string()
+        } else if plan.delete_roots.is_empty() {
+            style(mode_text).green().bold().to_string()
+        } else if force {
+            style(mode_text).red().bold().to_string()
+        } else {
+            style(mode_text).yellow().bold().to_string()
+        }
+    } else {
+        mode_text.to_owned()
+    };
+    let heading = if colors_enabled {
+        style("Deletion plan:").bold().to_string()
+    } else {
+        "Deletion plan:".to_owned()
+    };
 
-    writeln!(output, "Deletion plan: {mode}")?;
+    writeln!(output, "{heading} {mode}")?;
     writeln!(output, "Root: {}", plan.root.display())?;
     writeln!(output)?;
     if (!keep_summary && !plan.keep_items.is_empty())
@@ -228,11 +314,11 @@ fn print_plan(
         writeln!(output)?;
         writeln!(
             output,
-            "Summary sections do not list item paths. Run --dry-run without summary options to inspect all paths before deleting."
+            "Summary sections hide item paths. Run --dry-run without --summary to inspect all paths before deleting."
         )?;
     }
 
-    output.flush()
+    Ok(())
 }
 
 fn print_item_section(
@@ -474,8 +560,9 @@ fn remove_file_or_directory_link(path: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{flat_item_type_rank, style_flat_item, tree_item_suffix};
-    use remove_except::{ItemType, PlannedItem};
+    use super::{Args, flat_item_type_rank, render_plan, style_flat_item, tree_item_suffix};
+    use clap::CommandFactory;
+    use remove_except::{ItemType, PlannedItem, RemovalPlan};
 
     #[test]
     // ツリー表示用の接尾辞がディレクトリとシンボリックリンクを識別することを確認する。
@@ -547,5 +634,78 @@ mod tests {
         assert!(output.contains("\u{1b}[36m\u{1b}[1mlink@"));
         assert!(output.contains("\u{1b}[32m\u{1b}[1mkept-parent/"));
         assert!(output.contains("remove.txt"));
+    }
+
+    #[test]
+    fn render_plan_supports_colored_and_uncolored_output() {
+        let plan = RemovalPlan {
+            root: "/workspace".into(),
+            direct_match_count: 1,
+            keep_items: vec![PlannedItem {
+                path: "/workspace/keep.txt".into(),
+                relative_path: "keep.txt".to_owned(),
+                item_type: ItemType::File,
+            }],
+            delete_items: vec![PlannedItem {
+                path: "/workspace/group/remove.txt".into(),
+                relative_path: "group/remove.txt".to_owned(),
+                item_type: ItemType::File,
+            }],
+            delete_roots: vec![PlannedItem {
+                path: "/workspace/group/remove.txt".into(),
+                relative_path: "group/remove.txt".to_owned(),
+                item_type: ItemType::File,
+            }],
+        };
+
+        let mut plain_output = Vec::new();
+        render_plan(
+            &mut plain_output,
+            &plan,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+        let plain_output = String::from_utf8(plain_output).unwrap();
+        assert!(plain_output.starts_with("Deletion plan: PREVIEW ONLY"));
+        assert!(plain_output.contains("group/+"));
+        assert!(!plain_output.contains('\u{1b}'));
+
+        let colors_were_enabled = console::colors_enabled();
+        console::set_colors_enabled(true);
+        let mut colored_output = Vec::new();
+        render_plan(
+            &mut colored_output,
+            &plan,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+        )
+        .unwrap();
+        console::set_colors_enabled(colors_were_enabled);
+        let colored_output = String::from_utf8(colored_output).unwrap();
+        assert!(colored_output.contains("\u{1b}[1mDeletion plan:"));
+        assert!(colored_output.contains("\u{1b}[36m\u{1b}[1mPREVIEW ONLY"));
+        assert!(colored_output.contains("\u{1b}[32m\u{1b}[1mgroup/"));
+        assert!(colored_output.contains("remove.txt"));
+    }
+
+    #[test]
+    fn help_styles_can_be_forced_for_tty_rendering() {
+        let mut command = Args::command().color(clap::ColorChoice::Always);
+        let help = command.render_long_help().ansi().to_string();
+
+        assert!(help.contains("\u{1b}["));
+        assert!(help.contains("Usage:"));
+        assert!(help.contains("--dry-run"));
     }
 }

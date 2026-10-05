@@ -353,7 +353,7 @@ fn default_display_groups_directories_and_marks_kept_parents_without_root_tags()
 }
 
 #[test]
-// --flat がツリーではなく相対パス一覧を表示することを確認する。
+// --layout flat がツリーではなく相対パス一覧を表示することを確認する。
 fn flat_option_displays_relative_paths_instead_of_a_tree() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
@@ -362,7 +362,7 @@ fn flat_option_displays_relative_paths_instead_of_a_tree() {
     let output = Command::cargo_bin("remove-except")
         .unwrap()
         .current_dir(temp.path())
-        .args(["--dry-run", "--flat", "keep.txt"])
+        .args(["--dry-run", "--layout", "flat", "keep.txt"])
         .assert()
         .success()
         .get_output()
@@ -399,7 +399,7 @@ fn flat_type_sort_groups_types_and_sorts_paths_within_each_type() {
     let default_output = Command::cargo_bin("remove-except")
         .unwrap()
         .current_dir(temp.path())
-        .args(["--dry-run", "--flat", "keep.txt"])
+        .args(["--dry-run", "--layout", "flat", "keep.txt"])
         .assert()
         .success()
         .get_output()
@@ -411,7 +411,13 @@ fn flat_type_sort_groups_types_and_sorts_paths_within_each_type() {
     let sorted_output = Command::cargo_bin("remove-except")
         .unwrap()
         .current_dir(temp.path())
-        .args(["--dry-run", "--flat", "--sort-by-type", "keep.txt"])
+        .args([
+            "--dry-run",
+            "--layout",
+            "flat",
+            "--sort-by-type",
+            "keep.txt",
+        ])
         .assert()
         .success()
         .get_output()
@@ -451,7 +457,13 @@ fn flat_type_sort_places_symlinks_after_files() {
     let output = Command::cargo_bin("remove-except")
         .unwrap()
         .current_dir(temp.path())
-        .args(["--dry-run", "--flat", "--sort-by-type", "keep.txt"])
+        .args([
+            "--dry-run",
+            "--layout",
+            "flat",
+            "--sort-by-type",
+            "keep.txt",
+        ])
         .assert()
         .success()
         .get_output()
@@ -464,7 +476,7 @@ fn flat_type_sort_places_symlinks_after_files() {
 }
 
 #[test]
-// --sort-by-type を --flat なしで指定すると拒否されることを確認する。
+// --sort-by-type を tree layout で指定すると拒否されることを確認する。
 fn flat_type_sort_requires_flat_option() {
     let output = Command::cargo_bin("remove-except")
         .unwrap()
@@ -474,7 +486,46 @@ fn flat_type_sort_requires_flat_option() {
         .get_output()
         .stderr
         .clone();
-    assert!(String::from_utf8_lossy(&output).contains("--flat"));
+    let output = String::from_utf8_lossy(&output);
+    assert!(output.contains("--layout flat"));
+    assert!(output.contains("Usage:"));
+}
+
+#[test]
+// --layout と --summary が選択肢と既定値をヘルプに示すことを確認する。
+fn help_documents_layout_and_summary_options() {
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8_lossy(&output);
+
+    assert!(output.contains("<KEEP_PATTERN>..."));
+    assert!(output.contains("--layout <LAYOUT>"));
+    assert!(output.contains("[default: tree]"));
+    assert!(output.contains("--summary <SECTION>"));
+    assert!(output.contains("keep, delete, or both"));
+    assert!(!output.contains('\u{1b}'));
+}
+
+#[test]
+fn replaced_display_options_are_rejected() {
+    for obsolete_option in [
+        "--flat",
+        "--keep-summary",
+        "--delete-summary",
+        "--summary-only",
+    ] {
+        Command::cargo_bin("remove-except")
+            .unwrap()
+            .args([obsolete_option, "keep.txt"])
+            .assert()
+            .failure();
+    }
 }
 
 #[test]
@@ -502,7 +553,7 @@ fn tree_display_labels_retained_parent_for_delete_child() {
 }
 
 #[test]
-// --keep-summary が保持項目のパスだけを省略し、削除一覧を保つことを確認する。
+// --summary keep が保持項目のパスだけを省略し、削除一覧を保つことを確認する。
 fn keep_summary_hides_only_keep_paths() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
@@ -511,7 +562,7 @@ fn keep_summary_hides_only_keep_paths() {
     let output = Command::cargo_bin("remove-except")
         .unwrap()
         .current_dir(temp.path())
-        .args(["--dry-run", "--keep-summary", "keep.txt"])
+        .args(["--dry-run", "--summary", "keep", "keep.txt"])
         .assert()
         .success()
         .get_output()
@@ -529,7 +580,7 @@ fn keep_summary_hides_only_keep_paths() {
 }
 
 #[test]
-// --delete-summary が削除項目のパスだけを省略し、保持一覧を保つことを確認する。
+// --summary delete が削除項目のパスだけを省略し、保持一覧を保つことを確認する。
 fn delete_summary_hides_only_delete_paths() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
@@ -538,7 +589,7 @@ fn delete_summary_hides_only_delete_paths() {
     let output = Command::cargo_bin("remove-except")
         .unwrap()
         .current_dir(temp.path())
-        .args(["--dry-run", "--delete-summary", "keep.txt"])
+        .args(["--dry-run", "--summary", "delete", "keep.txt"])
         .assert()
         .success()
         .get_output()
@@ -554,7 +605,7 @@ fn delete_summary_hides_only_delete_paths() {
 }
 
 #[test]
-// --summary-only が保持・削除両方の要約指定と同じ出力になることを確認する。
+// --summary both が保持・削除両方を要約することを確認する。
 fn summary_only_matches_both_section_summary_options() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
@@ -563,7 +614,7 @@ fn summary_only_matches_both_section_summary_options() {
     let summary_only = Command::cargo_bin("remove-except")
         .unwrap()
         .current_dir(temp.path())
-        .args(["--dry-run", "--summary-only", "keep.txt"])
+        .args(["--dry-run", "--summary", "both", "keep.txt"])
         .assert()
         .success()
         .get_output()
@@ -572,12 +623,7 @@ fn summary_only_matches_both_section_summary_options() {
     let both_summaries = Command::cargo_bin("remove-except")
         .unwrap()
         .current_dir(temp.path())
-        .args([
-            "--dry-run",
-            "--keep-summary",
-            "--delete-summary",
-            "keep.txt",
-        ])
+        .args(["--dry-run", "--summary", "both", "keep.txt"])
         .assert()
         .success()
         .get_output()
@@ -616,13 +662,17 @@ fn force_removes_unmatched_items_and_keeps_matching_items() {
     temp.child("keep.txt").write_str("keep").unwrap();
     temp.child("remove.txt").write_str("remove").unwrap();
 
-    Command::cargo_bin("remove-except")
+    let output = Command::cargo_bin("remove-except")
         .unwrap()
         .current_dir(temp.path())
         .args(["--force", "keep.txt"])
         .assert()
-        .success();
+        .success()
+        .get_output()
+        .stdout
+        .clone();
 
+    assert!(String::from_utf8_lossy(&output).contains("Removal complete."));
     temp.child("keep.txt").assert("keep");
     assert!(!temp.path().join("remove.txt").exists());
 }
@@ -740,17 +790,18 @@ fn confirmation_defaults_to_no() {
     let output = Command::cargo_bin("remove-except")
         .unwrap()
         .current_dir(temp.path())
-        .args(["--keep-summary", "--delete-summary", "keep-nothing"])
+        .args(["--summary", "both", "keep-nothing"])
         .write_stdin("n\n")
         .assert()
         .success()
         .get_output()
-        .stdout
         .clone();
 
-    let output = String::from_utf8_lossy(&output);
-    assert!(output.contains("Summary sections do not list item paths."));
-    assert!(output.contains("Aborted."));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("Summary sections hide item paths."));
+    assert!(stdout.contains("Aborted."));
+    assert!(stderr.contains("Delete the plan? Summary sections do not list item paths."));
     temp.child("remove.txt").assert("remove");
 }
 
@@ -769,17 +820,19 @@ fn confirmation_shows_both_item_lists_before_prompt_and_preserves_items_on_rejec
         .assert()
         .success()
         .get_output()
-        .stdout
         .clone();
-    let output = String::from_utf8_lossy(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
-    let keep_list = output.find("Items to keep (1):").unwrap();
-    let delete_list = output.find("Items to delete (1):").unwrap();
-    let prompt = output
+    let keep_list = stdout.find("Items to keep (1):").unwrap();
+    let delete_list = stdout.find("Items to delete (1):").unwrap();
+    let prompt = stderr
         .find("Are you sure you want to delete the above items?")
         .unwrap();
-    assert!(keep_list < delete_list && delete_list < prompt);
-    assert!(output.contains("Aborted."));
+    assert!(keep_list < delete_list);
+    assert!(!stdout.contains("Are you sure you want to delete"));
+    assert_eq!(prompt, 0);
+    assert!(stdout.contains("Aborted."));
     temp.child("keep.txt").assert("keep");
     temp.child("remove.txt").assert("remove");
 }
@@ -794,7 +847,7 @@ fn force_with_summary_options_still_removes_unmatched_items() {
     Command::cargo_bin("remove-except")
         .unwrap()
         .current_dir(temp.path())
-        .args(["--force", "--summary-only", "keep.txt"])
+        .args(["--force", "--summary", "both", "keep.txt"])
         .assert()
         .success();
 
