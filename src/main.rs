@@ -110,10 +110,10 @@ fn main() -> Result<()> {
     let root = resolve_root(&current_dir, args.root)?;
     let plan = build_plan(&root, &args.patterns)?;
 
-    if plan.direct_match_count == 0 {
+    if plan.direct_match_count() == 0 {
         eprintln!(
             "WARNING: No items matched the keep patterns. Everything under {} would be removed.",
-            plan.root.display()
+            plan.root().display()
         );
     }
 
@@ -133,7 +133,7 @@ fn main() -> Result<()> {
         args.sort_by_type,
     )?;
 
-    if args.dry_run || plan.delete_roots.is_empty() {
+    if args.dry_run || plan.delete_roots().is_empty() {
         return Ok(());
     }
 
@@ -142,8 +142,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    for item in &plan.delete_roots {
-        remove_item(item).with_context(|| format!("Failed to remove {}", item.path.display()))?;
+    for item in plan.delete_roots() {
+        remove_item(item).with_context(|| format!("Failed to remove {}", item.path().display()))?;
     }
 
     println!("Removal complete.");
@@ -247,7 +247,7 @@ fn render_plan(
 ) -> io::Result<()> {
     let mode_text = if dry_run {
         "PREVIEW ONLY - nothing will be removed"
-    } else if plan.delete_roots.is_empty() {
+    } else if plan.delete_roots().is_empty() {
         "No removal operations are needed"
     } else if force {
         "DELETION ENABLED (--force)"
@@ -257,7 +257,7 @@ fn render_plan(
     let mode = if colors_enabled {
         if dry_run {
             style(mode_text).cyan().bold().to_string()
-        } else if plan.delete_roots.is_empty() {
+        } else if plan.delete_roots().is_empty() {
             style(mode_text).green().bold().to_string()
         } else if force {
             style(mode_text).red().bold().to_string()
@@ -274,10 +274,10 @@ fn render_plan(
     };
 
     writeln!(output, "{heading} {mode}")?;
-    writeln!(output, "Root: {}", plan.root.display())?;
+    writeln!(output, "Root: {}", plan.root().display())?;
     writeln!(output)?;
-    if (!keep_summary && !plan.keep_items.is_empty())
-        || (!delete_summary && !plan.delete_items.is_empty())
+    if (!keep_summary && !plan.keep_items().is_empty())
+        || (!delete_summary && !plan.delete_items().is_empty())
     {
         let legend = if flat {
             "Legend: blue directory, cyan symlink; without color: / directory, @ symlink"
@@ -290,14 +290,14 @@ fn render_plan(
     let options = PlanDisplayOptions {
         flat,
         sort_by_type,
-        direct_match_count: plan.direct_match_count,
-        delete_root_count: plan.delete_roots.len(),
+        direct_match_count: plan.direct_match_count(),
+        delete_root_count: plan.delete_roots().len(),
         colors_enabled,
     };
     print_item_section(
         &mut output,
         "Items to keep",
-        &plan.keep_items,
+        plan.keep_items(),
         keep_summary,
         &options,
     )?;
@@ -305,7 +305,7 @@ fn render_plan(
     print_item_section(
         &mut output,
         "Items to delete",
-        &plan.delete_items,
+        plan.delete_items(),
         delete_summary,
         &options,
     )?;
@@ -371,24 +371,24 @@ fn print_item_section(
         let mut ordered_items: Vec<_> = items.iter().collect();
         if options.sort_by_type {
             ordered_items.sort_unstable_by(|left, right| {
-                flat_item_type_rank(left.item_type)
-                    .cmp(&flat_item_type_rank(right.item_type))
-                    .then_with(|| left.relative_path.cmp(&right.relative_path))
+                flat_item_type_rank(left.item_type())
+                    .cmp(&flat_item_type_rank(right.item_type()))
+                    .then_with(|| left.relative_path().cmp(right.relative_path()))
             });
         }
         for item in ordered_items {
-            let item_type = format!("{:<12}", item_type_name(item.item_type));
+            let item_type = format!("{:<12}", item_type_name(item.item_type()));
             let suffix = if options.colors_enabled {
                 ""
             } else {
-                tree_item_suffix(item.item_type)
+                tree_item_suffix(item.item_type())
             };
-            let relative_path = format!("{}{suffix}", item.relative_path);
+            let relative_path = format!("{}{suffix}", item.relative_path());
             writeln!(
                 output,
                 "{}  {}",
-                style_flat_item(&item_type, item.item_type, options.colors_enabled),
-                style_flat_item(&relative_path, item.item_type, options.colors_enabled)
+                style_flat_item(&item_type, item.item_type(), options.colors_enabled),
+                style_flat_item(&relative_path, item.item_type(), options.colors_enabled)
             )?;
         }
     } else {
@@ -409,10 +409,10 @@ fn print_tree_items(
     let mut start = 0;
     while start < items.len() {
         let remainder = if parent_path.is_empty() {
-            items[start].relative_path.as_str()
+            items[start].relative_path()
         } else {
             items[start]
-                .relative_path
+                .relative_path()
                 .strip_prefix(parent_path)
                 .and_then(|path| path.strip_prefix('/'))
                 .ok_or_else(|| {
@@ -428,26 +428,26 @@ fn print_tree_items(
         let child_prefix = format!("{child_path}/");
         let mut end = start + 1;
         while end < items.len()
-            && (items[end].relative_path == child_path
-                || items[end].relative_path.starts_with(&child_prefix))
+            && (items[end].relative_path() == child_path
+                || items[end].relative_path().starts_with(&child_prefix))
         {
             end += 1;
         }
 
-        let item = (items[start].relative_path == child_path).then_some(items[start]);
+        let item = (items[start].relative_path() == child_path).then_some(items[start]);
         let descendants_start = start + usize::from(item.is_some());
-        let is_directory = item.is_none_or(|item| item.item_type == ItemType::Directory)
+        let is_directory = item.is_none_or(|item| item.item_type() == ItemType::Directory)
             || descendants_start < end;
         let is_last = end == items.len();
         let connector = if is_last { "└──" } else { "├──" };
         let next_prefix = format!("{branch_prefix}{}", if is_last { "    " } else { "│   " });
         let suffix = item
-            .map(|item| tree_item_suffix(item.item_type))
+            .map(|item| tree_item_suffix(item.item_type()))
             .unwrap_or(if is_directory { "/" } else { "" });
         let is_kept_parent = item.is_none();
         let display_name = format!("{name}{suffix}");
         let display_name = if colors_enabled {
-            match item.map(|item| item.item_type) {
+            match item.map(|item| item.item_type()) {
                 Some(ItemType::Directory) => style(display_name).blue().bold().to_string(),
                 Some(ItemType::Symlink) => style(display_name).cyan().bold().to_string(),
                 _ if is_kept_parent => style(display_name).green().bold().to_string(),
@@ -479,17 +479,17 @@ fn print_tree_items(
 }
 
 fn compare_tree_order(left: &PlannedItem, right: &PlannedItem) -> Ordering {
-    let mut left_parts = left.relative_path.split('/').peekable();
-    let mut right_parts = right.relative_path.split('/').peekable();
+    let mut left_parts = left.relative_path().split('/').peekable();
+    let mut right_parts = right.relative_path().split('/').peekable();
 
     loop {
         match (left_parts.next(), right_parts.next()) {
             (Some(left_part), Some(right_part)) if left_part == right_part => {}
             (Some(left_part), Some(right_part)) => {
                 let left_is_directory =
-                    left_parts.peek().is_some() || left.item_type == ItemType::Directory;
+                    left_parts.peek().is_some() || left.item_type() == ItemType::Directory;
                 let right_is_directory =
-                    right_parts.peek().is_some() || right.item_type == ItemType::Directory;
+                    right_parts.peek().is_some() || right.item_type() == ItemType::Directory;
                 return right_is_directory
                     .cmp(&left_is_directory)
                     .then_with(|| left_part.cmp(right_part));
@@ -538,9 +538,9 @@ fn tree_item_suffix(item_type: ItemType) -> &'static str {
 }
 
 fn remove_item(item: &PlannedItem) -> std::io::Result<()> {
-    match item.item_type {
-        ItemType::Directory => fs::remove_dir_all(&item.path),
-        ItemType::File | ItemType::Symlink => remove_file_or_directory_link(&item.path),
+    match item.item_type() {
+        ItemType::Directory => fs::remove_dir_all(item.path()),
+        ItemType::File | ItemType::Symlink => remove_file_or_directory_link(item.path()),
     }
 }
 
@@ -561,8 +561,9 @@ fn remove_file_or_directory_link(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{Args, flat_item_type_rank, render_plan, style_flat_item, tree_item_suffix};
+    use assert_fs::prelude::*;
     use clap::CommandFactory;
-    use remove_except::{ItemType, PlannedItem, RemovalPlan};
+    use remove_except::{ItemType, build_plan};
 
     #[test]
     // ツリー表示用の接尾辞がディレクトリとシンボリックリンクを識別することを確認する。
@@ -598,26 +599,28 @@ mod tests {
     #[test]
     // ツリー表示で実ディレクトリ、シンボリックリンク、保持済み親を色分けすることを確認する。
     fn tree_item_styles_directories_symlinks_and_kept_parents() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("real-dir/file.txt").write_str("file").unwrap();
+        temp.child("kept-parent/keep.txt")
+            .write_str("keep")
+            .unwrap();
+        temp.child("kept-parent/remove.txt")
+            .write_str("remove")
+            .unwrap();
+        let link = temp.path().join("real-dir/link");
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink("file.txt", &link);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_file("file.txt", &link);
+        if link_result.is_err() {
+            eprintln!("Skipping tree symlink style test because symlink creation is unavailable");
+            return;
+        }
+        let plan = build_plan(temp.path(), &["kept-parent/keep.txt".to_owned()]).unwrap();
+
         let colors_were_enabled = console::colors_enabled();
         console::set_colors_enabled(true);
 
-        let items = [
-            PlannedItem {
-                path: "real-dir".into(),
-                relative_path: "real-dir".to_owned(),
-                item_type: ItemType::Directory,
-            },
-            PlannedItem {
-                path: "real-dir/link".into(),
-                relative_path: "real-dir/link".to_owned(),
-                item_type: ItemType::Symlink,
-            },
-            PlannedItem {
-                path: "kept-parent/remove.txt".into(),
-                relative_path: "kept-parent/remove.txt".to_owned(),
-                item_type: ItemType::File,
-            },
-        ];
         let options = super::PlanDisplayOptions {
             flat: false,
             sort_by_type: false,
@@ -626,7 +629,14 @@ mod tests {
             colors_enabled: true,
         };
         let mut output = Vec::new();
-        super::print_item_section(&mut output, "Items to delete", &items, false, &options).unwrap();
+        super::print_item_section(
+            &mut output,
+            "Items to delete",
+            plan.delete_items(),
+            false,
+            &options,
+        )
+        .unwrap();
 
         console::set_colors_enabled(colors_were_enabled);
         let output = String::from_utf8(output).unwrap();
@@ -638,25 +648,10 @@ mod tests {
 
     #[test]
     fn render_plan_supports_colored_and_uncolored_output() {
-        let plan = RemovalPlan {
-            root: "/workspace".into(),
-            direct_match_count: 1,
-            keep_items: vec![PlannedItem {
-                path: "/workspace/keep.txt".into(),
-                relative_path: "keep.txt".to_owned(),
-                item_type: ItemType::File,
-            }],
-            delete_items: vec![PlannedItem {
-                path: "/workspace/group/remove.txt".into(),
-                relative_path: "group/remove.txt".to_owned(),
-                item_type: ItemType::File,
-            }],
-            delete_roots: vec![PlannedItem {
-                path: "/workspace/group/remove.txt".into(),
-                relative_path: "group/remove.txt".to_owned(),
-                item_type: ItemType::File,
-            }],
-        };
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("group/keep.txt").write_str("keep").unwrap();
+        temp.child("group/remove.txt").write_str("remove").unwrap();
+        let plan = build_plan(temp.path(), &["group/keep.txt".to_owned()]).unwrap();
 
         let mut plain_output = Vec::new();
         render_plan(

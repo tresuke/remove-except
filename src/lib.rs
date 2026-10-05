@@ -2,69 +2,53 @@
 //!
 //! [`build_plan`] はルートディレクトリ自体を残したまま、その配下を走査します。
 //! 保持パターンは複数指定でき、いずれかに一致した項目とその祖先を保持します。
+//! 計画作成はファイルシステムを変更しません。返される計画は走査時点の情報であり、
+//! その後のファイルシステム変更を反映したり、削除を実行したりはしません。
 
 use std::collections::HashSet;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use walkdir::WalkDir;
 
-/// 走査対象内で見つかった項目の種類です。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ItemType {
-    /// 通常のファイルです。
-    File,
-    /// ディレクトリです。
-    Directory,
-    /// シンボリックリンク自体です。リンク先は走査しません。
-    Symlink,
-}
+mod model;
+mod path;
+mod pattern;
 
-/// 保持または削除の計画に含まれるファイルシステム項目です。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlannedItem {
-    /// ルートを基準に解決した項目の絶対パスです。
-    pub path: PathBuf,
-    /// ルートからの相対パスです。区切り文字には `/` を使います。
-    pub relative_path: String,
-    /// 項目の種類です。
-    pub item_type: ItemType,
-}
-
-/// ルート配下の走査結果と保持・削除対象をまとめた計画です。
-#[derive(Debug)]
-pub struct RemovalPlan {
-    /// 正規化された走査ルートです。このパス自体は計画に含まれません。
-    pub root: PathBuf,
-    /// 保持パターンに直接一致した項目数です。祖先のみの項目は含みません。
-    pub direct_match_count: usize,
-    /// 保持される項目とその祖先です。相対パス順に並びます。
-    pub keep_items: Vec<PlannedItem>,
-    /// 削除対象となる全項目です。相対パス順に並びます。
-    pub delete_items: Vec<PlannedItem>,
-    /// 実削除に使う最上位の項目です。削除対象ディレクトリ内の子孫は含みません。
-    pub delete_roots: Vec<PlannedItem>,
-}
-
-struct PatternSpec {
-    glob_index: usize,
-    prefix: Option<String>,
-}
+pub use model::{ItemType, PlannedItem, RemovalPlan};
+use path::{display_path, is_drive_relative_path, is_filesystem_root, path_matches_prefix};
+use pattern::compile_patterns;
 
 /// ルート配下を走査し、保持・削除対象の計画を作成します。
 ///
 /// パターンは保持対象を指定します。複数のパターンを指定した場合はいずれかに
 /// 一致した項目を保持し、その祖先も保持します。`*` と `?` はパス区切りをまたがず、
 /// `**` は複数階層に一致します。リテラルのディレクトリ指定は配下も再帰的に保持します。
+/// 相対ルートはプロセスのカレントディレクトリ基準で解決し、相対パターンはルート基準です。
 ///
 /// シンボリックリンクはたどらず、リンク自体を1項目として扱います。ルートディレクトリ
-/// 自体は保持・削除一覧に含まれません。
+/// 自体は保持・削除一覧に含まれません。計画作成はファイルを変更せず、結果は走査時点の
+/// スナップショットです。計画後にファイルシステムが変更されても自動で再検証されません。
 ///
 /// # Errors
 ///
-/// パターンが空、無効なGlob、親ディレクトリへの移動を含む、またはルート外の絶対パスを
-/// 指す場合にエラーを返します。ルートの解決や走査に失敗した場合もエラーになります。
+/// パターンが未指定または空、無効なglob、親ディレクトリへの移動を含む、またはルート外の
+/// 絶対パスを指す場合にエラーを返します。filesystem rootやディレクトリ以外をルートに
+/// 指定した場合、ルートの解決や走査に失敗した場合もエラーになります。詳細なエラー文言は
+/// 安定したAPI契約ではありません。
+///
+/// # Examples
+///
+/// ```no_run
+/// use remove_except::build_plan;
+/// use std::path::Path;
+///
+/// let plan = build_plan(Path::new("work"), &["*.md".to_owned()])
+///     .expect("the root and pattern should be valid");
+/// for item in plan.delete_roots() {
+///     println!("{}", item.relative_path());
+/// }
+/// ```
 pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
     if patterns.is_empty() {
         bail!("At least one pattern is required");
@@ -177,160 +161,13 @@ pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
     })
 }
 
-/// 保持パターンをGlobSetに変換し、リテラルのディレクトリ指定を記録します。
-fn compile_patterns(root: &Path, patterns: &[String]) -> Result<(GlobSet, Vec<PatternSpec>)> {
-    let root_text = normalize_absolute_for_match(&root.to_string_lossy());
-    let mut builder = GlobSetBuilder::new();
-    let mut specs = Vec::with_capacity(patterns.len());
-
-    for raw in patterns {
-        let raw = raw.trim();
-        if raw.is_empty() {
-            bail!("Pattern must not be empty");
-        }
-        if raw.split(['/', '\\']).any(|component| component == "..") {
-            bail!("Parent directory traversal is not allowed in pattern: {raw}");
-        }
-
-        let pattern = normalize_pattern(&root_text, raw)?;
-        let matcher = GlobBuilder::new(&pattern)
-            .literal_separator(true)
-            .case_insensitive(cfg!(windows))
-            .build()
-            .with_context(|| format!("Invalid glob pattern: {raw}"))?;
-        let glob_index = specs.len();
-        builder.add(matcher);
-
-        let prefix = if !pattern.contains(['*', '?', '[']) {
-            Some(pattern.trim_end_matches('/').to_owned())
-        } else {
-            None
-        };
-        specs.push(PatternSpec { glob_index, prefix });
-    }
-
-    Ok((builder.build()?, specs))
-}
-
-/// 絶対パターンをルート相対へ変換し、ルート外の指定を拒否します。
-fn normalize_pattern(root_text: &str, pattern: &str) -> Result<String> {
-    if is_drive_relative_path(pattern) {
-        bail!("Drive-relative patterns are not supported: {pattern}");
-    }
-
-    let normalized = normalize_absolute_for_match(pattern);
-    let root_text = normalize_absolute_for_match(root_text);
-
-    if is_absolute_pattern(pattern) {
-        let boundary_root = root_text.trim_end_matches('/');
-        let root_matches = |candidate: &str| {
-            if cfg!(windows) {
-                candidate.eq_ignore_ascii_case(boundary_root)
-            } else {
-                candidate == boundary_root
-            }
-        };
-        let is_within_root = root_matches(&normalized)
-            || normalized.get(..boundary_root.len()).is_some_and(|prefix| {
-                root_matches(prefix) && normalized[boundary_root.len()..].starts_with('/')
-            });
-        if !is_within_root {
-            bail!("Absolute pattern is outside the processing root: {pattern}");
-        }
-        let relative = normalized[boundary_root.len()..].trim_start_matches('/');
-        Ok(relative.to_owned())
-    } else {
-        let mut relative = normalized.as_str();
-        while let Some(stripped) = relative.strip_prefix("./") {
-            relative = stripped;
-        }
-        let relative = relative.trim_matches('/');
-        Ok(relative.to_owned())
-    }
-}
-
-/// パスをGlob照合用に正規化します。Windowsでは区切りと拡張パス表記も正規化します。
-fn normalize_absolute_for_match(path: &str) -> String {
-    let normalized = if cfg!(windows) {
-        path.replace('\\', "/")
-    } else {
-        path.to_owned()
-    };
-    if cfg!(windows) {
-        if let Some(unc_path) = normalized.strip_prefix("//?/UNC/") {
-            return format!("//{unc_path}");
-        }
-        if let Some(path) = normalized.strip_prefix("//?/") {
-            return path.to_owned();
-        }
-    }
-    normalized
-}
-
-/// パスが指定ディレクトリとその配下に含まれるか判定します。
-fn path_matches_prefix(path: &str, prefix: &str) -> bool {
-    if prefix.is_empty() {
-        return true;
-    }
-    let starts_with_prefix = if cfg!(windows) {
-        path.get(..prefix.len())
-            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
-    } else {
-        path.starts_with(prefix)
-    };
-    starts_with_prefix
-        && (path.len() == prefix.len()
-            || path
-                .get(prefix.len()..)
-                .is_some_and(|suffix| suffix.starts_with('/')))
-}
-
-fn is_absolute_pattern(pattern: &str) -> bool {
-    Path::new(pattern).is_absolute()
-        || (cfg!(windows)
-            && (matches!(pattern.as_bytes().first(), Some(b'/' | b'\\'))
-                || (pattern.as_bytes().get(1) == Some(&b':')
-                    && pattern
-                        .as_bytes()
-                        .first()
-                        .is_some_and(u8::is_ascii_alphabetic)
-                    && pattern
-                        .as_bytes()
-                        .get(2)
-                        .is_some_and(|separator| matches!(separator, b'/' | b'\\')))))
-}
-
-fn is_drive_relative_path(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    cfg!(windows)
-        && bytes.first().is_some_and(u8::is_ascii_alphabetic)
-        && bytes.get(1) == Some(&b':')
-        && !bytes
-            .get(2)
-            .is_some_and(|separator| matches!(separator, b'/' | b'\\'))
-}
-
-fn is_filesystem_root(path: &Path) -> bool {
-    path.components()
-        .all(|component| !matches!(component, Component::Normal(_)))
-}
-
-/// 相対パスをプラットフォームに依存しない `/` 区切りの表示形式にします。
-fn display_path(path: &Path) -> String {
-    path.components()
-        .filter_map(|component| match component {
-            Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{ItemType, build_plan, is_filesystem_root};
     #[cfg(windows)]
-    use super::{is_drive_relative_path, normalize_pattern};
+    use super::path::is_drive_relative_path;
+    #[cfg(windows)]
+    use super::pattern::normalize_pattern;
+    use super::{ItemType, build_plan, is_filesystem_root};
     use assert_fs::prelude::*;
     use std::path::Path;
 

@@ -186,13 +186,29 @@ cargo run --manifest-path ..\Cargo.toml -- --dry-run keep.txt keep '*.md'
 
 ライブラリの `build_plan(root, patterns)` は、指定ルートと保持パターンから `RemovalPlan` を作成します。空のパターン、無効な glob、ルート外の絶対パス、親ディレクトリ移動、ルート以外のディレクトリを指定した場合はエラーを返します。ルートの走査に失敗した場合も計画作成はエラーになります。
 
-`RemovalPlan` の主なフィールド:
+`RemovalPlan` と `PlannedItem` のデータは getter 経由で読み取ります。getter は参照を返すため、計画内容を変更できません。公開フィールドを直接参照していたコードは getter 呼び出しへ移行してください。
 
-- `root`: 正規化された処理ルート。
-- `direct_match_count`: パターンに直接一致した項目数。一致なしの警告判定に使います。
-- `keep_items`: 保持対象となる項目すべて。祖先ディレクトリを含み、相対パス順に並びます。
-- `delete_items`: 削除対象となる項目すべて。相対パス順に並びます。
-- `delete_roots`: 実削除に使う最上位項目。削除対象ディレクトリの子孫は含めず、再帰削除の重複を避けます。
+```rust,no_run
+use remove_except::build_plan;
+use std::path::Path;
+
+let patterns = ["Cargo.toml".to_owned(), "src/**".to_owned()];
+let plan = build_plan(Path::new("."), &patterns).expect("valid plan");
+
+for item in plan.delete_roots() {
+    println!("{}", item.relative_path());
+}
+```
+
+`RemovalPlan` の getter:
+
+- `root()`: 正規化された処理ルート。
+- `direct_match_count()`: パターンに直接一致した項目数。一致なしの警告判定に使います。
+- `keep_items()`: 保持対象となる項目すべて。祖先ディレクトリを含み、相対パス順に並びます。
+- `delete_items()`: 削除対象となる項目すべて。相対パス順に並びます。
+- `delete_roots()`: 実削除に使う最上位項目。削除対象ディレクトリの子孫は含めず、再帰削除の重複を避けます。
+
+各 `PlannedItem` は `path()`、`relative_path()`、`item_type()` で読み取れます。相対パスは `/` 区切りです。
 
 走査時はシンボリックリンクをたどりません。計画作成後は CLI 側が `delete_roots` を削除します。削除中にファイルシステムエラーが起きた場合はエラー終了しますが、それ以前に削除済みの項目は元に戻りません。
 
@@ -204,6 +220,7 @@ Edition 2024 を使用します。開発環境では Rust 1.85 以降を使用�
 cargo fmt --check
 cargo test
 cargo build --release
+cargo doc --no-deps
 ```
 
 依存ライブラリは `Cargo.toml` で管理します。CLI は `clap`、確認プロンプトは `dialoguer`、glob 照合は `globset`、ディレクトリ走査は `walkdir`、エラー文脈の付与は `anyhow` を利用します。
