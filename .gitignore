@@ -1,2 +1,4 @@
 /target/
 /manual-test-workspace/
+**/.cache/remove-except-target/
+/local-test-tools/

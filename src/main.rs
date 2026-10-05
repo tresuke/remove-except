@@ -475,9 +475,10 @@ fn remove_file_or_directory_link(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{flat_item_type_rank, style_flat_item, tree_item_suffix};
-    use remove_except::ItemType;
+    use remove_except::{ItemType, PlannedItem};
 
     #[test]
+    // ツリー表示用の接尾辞がディレクトリとシンボリックリンクを識別することを確認する。
     fn tree_item_suffix_identifies_directories_and_symlinks() {
         assert_eq!(tree_item_suffix(ItemType::Directory), "/");
         assert_eq!(tree_item_suffix(ItemType::File), "");
@@ -485,12 +486,14 @@ mod tests {
     }
 
     #[test]
+    // フラット表示の種類順がディレクトリ、ファイル、シンボリックリンクであることを確認する。
     fn flat_item_type_rank_orders_directories_files_and_symlinks() {
         assert!(flat_item_type_rank(ItemType::Directory) < flat_item_type_rank(ItemType::File));
         assert!(flat_item_type_rank(ItemType::File) < flat_item_type_rank(ItemType::Symlink));
     }
 
     #[test]
+    // フラット表示でディレクトリとリンクに色を付け、ファイルは無色にすることを確認する。
     fn flat_item_styles_directories_and_symlinks_but_not_files() {
         let colors_were_enabled = console::colors_enabled();
         console::set_colors_enabled(true);
@@ -503,5 +506,46 @@ mod tests {
         assert!(directory.contains("34m"));
         assert_eq!(file, "File");
         assert!(symlink.contains("36m"));
+    }
+
+    #[test]
+    // ツリー表示で実ディレクトリ、シンボリックリンク、保持済み親を色分けすることを確認する。
+    fn tree_item_styles_directories_symlinks_and_kept_parents() {
+        let colors_were_enabled = console::colors_enabled();
+        console::set_colors_enabled(true);
+
+        let items = [
+            PlannedItem {
+                path: "real-dir".into(),
+                relative_path: "real-dir".to_owned(),
+                item_type: ItemType::Directory,
+            },
+            PlannedItem {
+                path: "real-dir/link".into(),
+                relative_path: "real-dir/link".to_owned(),
+                item_type: ItemType::Symlink,
+            },
+            PlannedItem {
+                path: "kept-parent/remove.txt".into(),
+                relative_path: "kept-parent/remove.txt".to_owned(),
+                item_type: ItemType::File,
+            },
+        ];
+        let options = super::PlanDisplayOptions {
+            flat: false,
+            sort_by_type: false,
+            direct_match_count: 1,
+            delete_root_count: 1,
+            colors_enabled: true,
+        };
+        let mut output = Vec::new();
+        super::print_item_section(&mut output, "Items to delete", &items, false, &options).unwrap();
+
+        console::set_colors_enabled(colors_were_enabled);
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("\u{1b}[34m\u{1b}[1mreal-dir/"));
+        assert!(output.contains("\u{1b}[36m\u{1b}[1mlink@"));
+        assert!(output.contains("\u{1b}[32m\u{1b}[1mkept-parent/"));
+        assert!(output.contains("remove.txt"));
     }
 }

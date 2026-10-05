@@ -2,6 +2,7 @@ use assert_cmd::Command;
 use assert_fs::prelude::*;
 
 #[test]
+// dry-run が保持項目と削除対象を表示し、ファイルを変更しないことを確認する。
 fn dry_run_lists_items_without_removing_them() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
@@ -27,6 +28,7 @@ fn dry_run_lists_items_without_removing_them() {
 }
 
 #[test]
+// 相対ルートが起動時ディレクトリ基準で解決され、ルート外を対象にしないことを確認する。
 fn relative_root_is_resolved_from_starting_directory() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("target/keep.txt").write_str("keep").unwrap();
@@ -54,6 +56,7 @@ fn relative_root_is_resolved_from_starting_directory() {
 }
 
 #[test]
+// 絶対パスで指定した処理ルートを受け付けることを確認する。
 fn absolute_root_is_accepted() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("target/keep.txt").write_str("keep").unwrap();
@@ -74,6 +77,7 @@ fn absolute_root_is_accepted() {
 }
 
 #[test]
+// 絶対保持パターンを選択ルート内に制限し、ルート外の指定を拒否することを確認する。
 fn absolute_keep_pattern_is_relative_to_selected_root_boundary() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("target/keep.txt").write_str("keep").unwrap();
@@ -127,6 +131,7 @@ fn absolute_keep_pattern_is_relative_to_selected_root_boundary() {
 }
 
 #[test]
+// --force 実行でも選択ルート自体とその兄弟項目を保護することを確認する。
 fn force_with_root_preserves_selected_root_and_siblings() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("target/keep.txt").write_str("keep").unwrap();
@@ -148,6 +153,30 @@ fn force_with_root_preserves_selected_root_and_siblings() {
 }
 
 #[test]
+// 一致項目がない --force はルートを残して配下をすべて削除することを確認する。
+fn force_with_no_matches_removes_all_items_under_selected_root() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("target/nested/remove.txt")
+        .write_str("remove")
+        .unwrap();
+    let root = temp.path().join("target");
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--root", "target", "missing"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    assert!(String::from_utf8_lossy(&output.stderr).contains("No items matched"));
+    assert!(root.is_dir());
+    assert!(!root.join("nested").exists());
+}
+
+#[test]
+// --force 指定時もファイルシステムのルートを処理対象として拒否することを確認する。
 fn filesystem_root_is_rejected_even_with_force() {
     let temp = assert_fs::TempDir::new().unwrap();
     let filesystem_root = temp.path().ancestors().last().unwrap();
@@ -171,6 +200,7 @@ fn filesystem_root_is_rejected_even_with_force() {
 }
 
 #[test]
+// ルートに指定したシンボリックリンクの正規化先を処理・表示することを確認する。
 fn root_symlink_processes_and_displays_its_canonical_target() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("target/keep.txt").write_str("keep").unwrap();
@@ -206,6 +236,66 @@ fn root_symlink_processes_and_displays_its_canonical_target() {
 }
 
 #[test]
+// ルート配下のファイル・ディレクトリーリンクをたどらず、削除時もリンク先を残すことを確認する。
+fn child_symlinks_are_not_traversed_or_removed_with_their_targets() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("root/keep.txt").write_str("keep").unwrap();
+    temp.child("outside/nested/secret.txt")
+        .write_str("secret")
+        .unwrap();
+    temp.child("outside-file.txt")
+        .write_str("file target")
+        .unwrap();
+    let root = temp.path().join("root");
+    let target = temp.path().join("outside");
+    let directory_link = root.join("external");
+    let file_target = temp.path().join("outside-file.txt");
+    let file_link = root.join("external-file");
+
+    #[cfg(unix)]
+    let directory_link_result = std::os::unix::fs::symlink(&target, &directory_link);
+    #[cfg(windows)]
+    let directory_link_result = std::os::windows::fs::symlink_dir(&target, &directory_link);
+
+    #[cfg(unix)]
+    let file_link_result = std::os::unix::fs::symlink(&file_target, &file_link);
+    #[cfg(windows)]
+    let file_link_result = std::os::windows::fs::symlink_file(&file_target, &file_link);
+
+    if directory_link_result.is_err() || file_link_result.is_err() {
+        eprintln!("Skipping child symlink test because symlink creation is unavailable");
+        return;
+    }
+
+    let preview = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--root", "root", "keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview = String::from_utf8_lossy(&preview);
+    assert!(preview.contains("external@"));
+    assert!(preview.contains("external-file@"));
+    assert!(!preview.contains("secret.txt"));
+
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--root", "root", "keep.txt"])
+        .assert()
+        .success();
+
+    assert!(std::fs::symlink_metadata(&directory_link).is_err());
+    assert!(std::fs::symlink_metadata(&file_link).is_err());
+    temp.child("outside/nested/secret.txt").assert("secret");
+    temp.child("outside-file.txt").assert("file target");
+}
+
+#[test]
+// 一致項目がない場合の警告に選択した処理ルートが含まれることを確認する。
 fn no_match_warning_names_selected_root() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("target/remove.txt").write_str("remove").unwrap();
@@ -226,10 +316,11 @@ fn no_match_warning_names_selected_root() {
 }
 
 #[test]
+// 既定のツリー表示でディレクトリをまとめ、削除ルート印を表示しないことを確認する。
 fn default_display_groups_directories_and_marks_kept_parents_without_root_tags() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
-    temp.child("z-file.txt").write_str("remove").unwrap();
+    temp.child("0-file.txt").write_str("remove").unwrap();
     temp.child("alpha/nested.txt").write_str("remove").unwrap();
     temp.child("beta/nested.txt").write_str("remove").unwrap();
 
@@ -252,7 +343,8 @@ fn default_display_groups_directories_and_marks_kept_parents_without_root_tags()
     assert!(output.contains("├── alpha/"));
     assert!(output.contains("│   └── nested.txt"));
     assert!(output.contains("├── beta/"));
-    assert!(output.contains("└── z-file.txt"));
+    assert!(output.contains("└── 0-file.txt"));
+    assert!(output.find("├── alpha/").unwrap() < output.find("0-file.txt").unwrap());
     assert!(!output.contains("!"));
     assert!(!output.contains("[Directory]"));
     assert!(!output.contains("[File]"));
@@ -261,6 +353,7 @@ fn default_display_groups_directories_and_marks_kept_parents_without_root_tags()
 }
 
 #[test]
+// --flat がツリーではなく相対パス一覧を表示することを確認する。
 fn flat_option_displays_relative_paths_instead_of_a_tree() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
@@ -294,6 +387,7 @@ fn flat_option_displays_relative_paths_instead_of_a_tree() {
 }
 
 #[test]
+// --sort-by-type が種類ごとに分類し、各種類内をパス順に表示することを確認する。
 fn flat_type_sort_groups_types_and_sorts_paths_within_each_type() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
@@ -336,6 +430,7 @@ fn flat_type_sort_groups_types_and_sorts_paths_within_each_type() {
 }
 
 #[test]
+// --sort-by-type でシンボリックリンクがファイルの後に並ぶことを確認する。
 fn flat_type_sort_places_symlinks_after_files() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
@@ -369,6 +464,7 @@ fn flat_type_sort_places_symlinks_after_files() {
 }
 
 #[test]
+// --sort-by-type を --flat なしで指定すると拒否されることを確認する。
 fn flat_type_sort_requires_flat_option() {
     let output = Command::cargo_bin("remove-except")
         .unwrap()
@@ -382,6 +478,7 @@ fn flat_type_sort_requires_flat_option() {
 }
 
 #[test]
+// ツリー表示で削除対象の子を持つ保持済み親ディレクトリを示すことを確認する。
 fn tree_display_labels_retained_parent_for_delete_child() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("group/keep.txt").write_str("keep").unwrap();
@@ -405,6 +502,7 @@ fn tree_display_labels_retained_parent_for_delete_child() {
 }
 
 #[test]
+// --keep-summary が保持項目のパスだけを省略し、削除一覧を保つことを確認する。
 fn keep_summary_hides_only_keep_paths() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
@@ -431,6 +529,7 @@ fn keep_summary_hides_only_keep_paths() {
 }
 
 #[test]
+// --delete-summary が削除項目のパスだけを省略し、保持一覧を保つことを確認する。
 fn delete_summary_hides_only_delete_paths() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
@@ -455,6 +554,7 @@ fn delete_summary_hides_only_delete_paths() {
 }
 
 #[test]
+// --summary-only が保持・削除両方の要約指定と同じ出力になることを確認する。
 fn summary_only_matches_both_section_summary_options() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
@@ -489,6 +589,7 @@ fn summary_only_matches_both_section_summary_options() {
 }
 
 #[test]
+// -n が --dry-run と同様にプレビューのみを行い、削除しないことを確認する。
 fn short_dry_run_option_previews_without_deleting_items() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
@@ -509,6 +610,7 @@ fn short_dry_run_option_previews_without_deleting_items() {
 }
 
 #[test]
+// --force が一致項目を残し、それ以外を削除することを確認する。
 fn force_removes_unmatched_items_and_keeps_matching_items() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
@@ -526,6 +628,7 @@ fn force_removes_unmatched_items_and_keeps_matching_items() {
 }
 
 #[test]
+// -f が --force と同様に一致項目以外を削除することを確認する。
 fn short_force_option_removes_unmatched_items() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
@@ -543,6 +646,51 @@ fn short_force_option_removes_unmatched_items() {
 }
 
 #[test]
+// 確認プロンプトに「はい」と答えると削除を実行することを確認する。
+fn confirmation_accepts_yes_and_removes_unmatched_items() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("keep.txt")
+        .write_stdin("y\n")
+        .assert()
+        .success();
+
+    temp.child("keep.txt").assert("keep");
+    assert!(!temp.path().join("remove.txt").exists());
+}
+
+#[test]
+// 削除対象がない場合は確認を求めず、保持内容をそのまま残すことを確認する。
+fn no_removal_operations_do_not_prompt_for_confirmation() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep/nested/important.txt")
+        .write_str("keep")
+        .unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("keep")
+        .write_stdin("")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8_lossy(&output);
+
+    assert!(output.contains("No removal operations are needed"));
+    assert!(!output.contains("Are you sure you want to delete"));
+    temp.child("keep/nested/important.txt").assert("keep");
+}
+
+#[test]
+// 複数の保持パターンが OR 条件で適用されることを確認する。
 fn multiple_patterns_keep_items_matching_any_pattern() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep-a.txt").write_str("keep").unwrap();
@@ -569,6 +717,7 @@ fn multiple_patterns_keep_items_matching_any_pattern() {
 }
 
 #[test]
+// 保持パターンを省略した CLI 呼び出しが拒否されることを確認する。
 fn missing_patterns_are_rejected() {
     let output = Command::cargo_bin("remove-except")
         .unwrap()
@@ -583,6 +732,7 @@ fn missing_patterns_are_rejected() {
 }
 
 #[test]
+// 確認プロンプトの既定回答が「いいえ」で、削除を中止することを確認する。
 fn confirmation_defaults_to_no() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("remove.txt").write_str("remove").unwrap();
@@ -605,6 +755,37 @@ fn confirmation_defaults_to_no() {
 }
 
 #[test]
+// 通常の確認前に保持・削除一覧を表示し、拒否時にファイルを残すことを確認する。
+fn confirmation_shows_both_item_lists_before_prompt_and_preserves_items_on_rejection() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .arg("keep.txt")
+        .write_stdin("n\n")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8_lossy(&output);
+
+    let keep_list = output.find("Items to keep (1):").unwrap();
+    let delete_list = output.find("Items to delete (1):").unwrap();
+    let prompt = output
+        .find("Are you sure you want to delete the above items?")
+        .unwrap();
+    assert!(keep_list < delete_list && delete_list < prompt);
+    assert!(output.contains("Aborted."));
+    temp.child("keep.txt").assert("keep");
+    temp.child("remove.txt").assert("remove");
+}
+
+#[test]
+// --force と要約表示を併用しても、要約どおり削除が実行されることを確認する。
 fn force_with_summary_options_still_removes_unmatched_items() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();

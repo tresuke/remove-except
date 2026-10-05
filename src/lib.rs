@@ -328,13 +328,14 @@ fn display_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ItemType, build_plan, is_drive_relative_path, is_filesystem_root, normalize_pattern,
-    };
+    use super::{ItemType, build_plan, is_filesystem_root};
+    #[cfg(windows)]
+    use super::{is_drive_relative_path, normalize_pattern};
     use assert_fs::prelude::*;
     use std::path::Path;
 
     #[test]
+    // UnixとWindowsのファイルシステムルートを正しく判定することを確認する。
     fn identifies_filesystem_root_paths() {
         assert!(is_filesystem_root(Path::new("/")));
 
@@ -348,6 +349,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    // Windowsのドライブ相対パスをルートと保持パターンの両方で拒否することを確認する。
     fn rejects_drive_relative_roots_and_patterns() {
         assert!(is_drive_relative_path("C:folder"));
         assert!(!is_drive_relative_path("C:\\folder"));
@@ -361,12 +363,45 @@ mod tests {
     }
 
     #[test]
+    // ファイルシステムルートを走査開始前に拒否することを確認する。
     fn rejects_filesystem_root_before_walking_it() {
         let error = build_plan(Path::new("/"), &["*".to_owned()]).unwrap_err();
         assert!(error.to_string().contains("Filesystem roots"));
     }
 
     #[test]
+    // パターン未指定、空パターン、不正なglobを拒否することを確認する。
+    fn rejects_empty_and_invalid_patterns() {
+        let temp = assert_fs::TempDir::new().unwrap();
+
+        let missing_error = build_plan(temp.path(), &[]).unwrap_err();
+        assert!(missing_error.to_string().contains("At least one pattern"));
+
+        let empty_error = build_plan(temp.path(), &[String::new()]).unwrap_err();
+        assert!(
+            empty_error
+                .to_string()
+                .contains("Pattern must not be empty")
+        );
+
+        let invalid_error = build_plan(temp.path(), &["[".to_owned()]).unwrap_err();
+        assert!(invalid_error.to_string().contains("Invalid glob pattern"));
+    }
+
+    #[test]
+    // ディレクトリ以外を処理ルートとして指定すると拒否することを確認する。
+    fn rejects_non_directory_root() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let root_file = temp.child("root.txt");
+        root_file.write_str("not a directory").unwrap();
+
+        let error = build_plan(root_file.path(), &["*".to_owned()]).unwrap_err();
+
+        assert!(error.to_string().contains("Root path is not a directory"));
+    }
+
+    #[test]
+    // パターン一致項目と祖先を保持し、それ以外を削除計画に含めることを確認する。
     fn keeps_matching_item_and_its_ancestors() {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("keep/nested/file.txt")
@@ -390,6 +425,7 @@ mod tests {
     }
 
     #[test]
+    // リテラルのディレクトリ指定が配下全体を保持することを確認する。
     fn directory_prefix_keeps_its_contents() {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("keep/deep/file.txt").write_str("keep").unwrap();
@@ -410,6 +446,7 @@ mod tests {
     }
 
     #[test]
+    // * は直下、** は複数階層のパスに一致することを確認する。
     fn globstar_matches_nested_paths_while_star_matches_one_level() {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("root.md").write_str("keep").unwrap();
@@ -433,6 +470,7 @@ mod tests {
     }
 
     #[test]
+    // ? と文字クラスがそれぞれ1文字に一致することを確認する。
     fn question_mark_and_character_class_match_one_character() {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("file1.c").write_str("keep").unwrap();
@@ -457,6 +495,7 @@ mod tests {
     }
 
     #[test]
+    // dir/* が直下の項目だけに一致し、子孫までは保持しないことを確認する。
     fn single_level_glob_does_not_keep_nested_directory_contents() {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("dir/top.txt").write_str("keep").unwrap();
@@ -472,6 +511,7 @@ mod tests {
     }
 
     #[test]
+    // 親ディレクトリへの移動を含む保持パターンを拒否することを確認する。
     fn rejects_parent_traversal() {
         let temp = assert_fs::TempDir::new().unwrap();
         let error = build_plan(temp.path(), &["../outside".to_owned()]).unwrap_err();
@@ -479,6 +519,7 @@ mod tests {
     }
 
     #[test]
+    // ルート外を指す絶対保持パターンを拒否することを確認する。
     fn absolute_pattern_must_stay_within_root_boundary() {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("keep.txt").write_str("keep").unwrap();
@@ -494,6 +535,7 @@ mod tests {
     }
 
     #[test]
+    // ルート内の絶対保持パターンで対象項目を保持できることを確認する。
     fn absolute_keep_pattern_matches_inside_root() {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("keep.txt").write_str("keep").unwrap();
@@ -507,6 +549,7 @@ mod tests {
     }
 
     #[test]
+    // Globの大文字・小文字の照合がプラットフォームごとの仕様に従うことを確認する。
     fn glob_case_sensitivity_matches_platform() {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("Keep.txt").write_str("keep").unwrap();
@@ -518,6 +561,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    // Windowsのルート相対パターンが選択ルート外なら拒否することを確認する。
     fn rejects_windows_root_relative_pattern_outside_current_root() {
         let temp = assert_fs::TempDir::new().unwrap();
 
