@@ -188,7 +188,11 @@ pub(super) fn normalize_pattern(root_text: &str, pattern: &str) -> Result<String
             relative = stripped;
         }
         let relative = relative.trim_matches('/');
-        Ok(relative.to_owned())
+        Ok(if relative == "." {
+            String::new()
+        } else {
+            relative.to_owned()
+        })
     }
 }
 
@@ -207,6 +211,30 @@ fn strip_case_insensitive_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a 
         Some(suffix)
     } else {
         suffix.strip_prefix('/')
+    }
+}
+
+#[cfg(test)]
+mod normalization_tests {
+    use super::normalize_pattern;
+
+    #[test]
+    fn root_patterns_normalize_to_an_empty_relative_pattern() {
+        assert_eq!(normalize_pattern("/work", ".").unwrap(), "");
+        assert_eq!(normalize_pattern("/work", "./").unwrap(), "");
+        assert_eq!(normalize_pattern("/work", "./.").unwrap(), "");
+    }
+
+    #[test]
+    fn absolute_sibling_with_shared_text_prefix_is_outside_root() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let root = temp.path().join("work");
+        let sibling_pattern = temp.path().join("work-sibling").join("*");
+
+        let error = normalize_pattern(&root.to_string_lossy(), &sibling_pattern.to_string_lossy())
+            .unwrap_err();
+
+        assert!(error.to_string().contains("outside the processing root"));
     }
 }
 

@@ -16,7 +16,8 @@ pub enum ItemType {
 /// 計画作成後にファイルシステムが変更された場合、この値は自動更新されません。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedItem {
-    /// ルートを基準に解決した項目の絶対パスです。
+    /// 正規化されたルートを基準に解決した項目の絶対パスです。
+    /// Windowsではcanonicalize表現により `\\?\` の拡張パスprefixが含まれる場合があります。
     pub(crate) path: PathBuf,
     /// ルートからの相対パスです。区切り文字には `/` を使います。
     pub(crate) relative_path: String,
@@ -25,7 +26,9 @@ pub struct PlannedItem {
 }
 
 impl PlannedItem {
-    /// ルートを基準に解決した項目の絶対パスを返します。
+    /// 正規化されたルートを基準に解決した項目の絶対パスを返します。
+    ///
+    /// Windowsではcanonicalize表現により `\\?\` の拡張パスprefixが含まれる場合があります。
     pub fn path(&self) -> &Path {
         &self.path
     }

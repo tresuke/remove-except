@@ -109,6 +109,14 @@ mod tests {
         assert!(!path_matches_prefix("Äother/file.txt", "ä"));
     }
 
+    #[test]
+    fn prefix_matching_respects_component_boundaries() {
+        assert!(path_matches_prefix("keep", "keep"));
+        assert!(path_matches_prefix("keep/file.txt", "keep"));
+        assert!(!path_matches_prefix("keeper/file.txt", "keep"));
+        assert!(!path_matches_prefix("other/keep/file.txt", "keep"));
+    }
+
     #[cfg(windows)]
     #[test]
     fn prefix_comparison_handles_different_utf8_byte_lengths() {

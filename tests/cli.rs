@@ -199,6 +199,34 @@ fn filesystem_root_is_rejected_even_with_force() {
     assert!(String::from_utf8_lossy(&output).contains("Filesystem roots"));
 }
 
+#[cfg(windows)]
+#[test]
+fn drive_relative_roots_and_patterns_are_rejected_by_cli() {
+    let temp = assert_fs::TempDir::new().unwrap();
+
+    let root_error = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--root", "C:folder", "keep.txt"])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    assert!(String::from_utf8_lossy(&root_error).contains("Drive-relative root"));
+
+    let pattern_error = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "C:folder"])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    assert!(String::from_utf8_lossy(&pattern_error).contains("Drive-relative pattern"));
+}
+
 #[test]
 // ルートに指定したシンボリックリンクの正規化先を処理・表示することを確認する。
 fn root_symlink_processes_and_displays_its_canonical_target() {
