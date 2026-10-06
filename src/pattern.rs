@@ -12,12 +12,6 @@ use crate::path::{
     paths_equal,
 };
 
-pub(super) struct PatternSpec {
-    #[cfg(not(windows))]
-    pub(super) glob_index: usize,
-    pub(super) prefix: Option<String>,
-}
-
 #[cfg(windows)]
 fn windows_glob_regex(glob: &globset::Glob) -> Result<String> {
     let byte_regex = glob
@@ -90,7 +84,7 @@ pub(super) fn compile_patterns(root: &Path, patterns: &[String]) -> Result<Compi
     let root_text = normalize_absolute_for_match(&root.to_string_lossy());
     #[cfg(not(windows))]
     let mut builder = GlobSetBuilder::new();
-    let mut specs = Vec::with_capacity(patterns.len());
+    let mut prefixes = Vec::with_capacity(patterns.len());
     #[cfg(windows)]
     let mut regexes = Vec::with_capacity(patterns.len());
 
@@ -108,22 +102,14 @@ pub(super) fn compile_patterns(root: &Path, patterns: &[String]) -> Result<Compi
             .literal_separator(true)
             .build()
             .with_context(|| format!("Invalid glob pattern: {raw}"))?;
-        #[cfg(not(windows))]
-        let glob_index = specs.len();
         #[cfg(windows)]
         regexes.push(windows_glob_regex(&glob)?);
         #[cfg(not(windows))]
         builder.add(glob);
 
-        let prefix = if !pattern.contains(['*', '?', '[']) {
-            Some(pattern.trim_end_matches('/').to_owned())
-        } else {
-            None
-        };
-        #[cfg(windows)]
-        specs.push(PatternSpec { prefix });
-        #[cfg(not(windows))]
-        specs.push(PatternSpec { glob_index, prefix });
+        if !pattern.contains(['*', '?', '[']) {
+            prefixes.push(pattern.trim_end_matches('/').to_owned());
+        }
     }
 
     #[cfg(windows)]
@@ -131,7 +117,7 @@ pub(super) fn compile_patterns(root: &Path, patterns: &[String]) -> Result<Compi
     #[cfg(not(windows))]
     let matcher = builder.build()?;
 
-    Ok(CompiledPatterns { matcher, specs })
+    Ok(CompiledPatterns { matcher, prefixes })
 }
 
 pub(super) struct CompiledPatterns {
@@ -139,7 +125,7 @@ pub(super) struct CompiledPatterns {
     matcher: Regex,
     #[cfg(not(windows))]
     matcher: GlobSet,
-    specs: Vec<PatternSpec>,
+    prefixes: Vec<String>,
 }
 
 impl CompiledPatterns {
@@ -149,21 +135,13 @@ impl CompiledPatterns {
             return true;
         }
         #[cfg(not(windows))]
-        let matched_globs = self.matcher.matches(path);
+        if self.matcher.is_match(path) {
+            return true;
+        }
 
-        self.specs.iter().any(|spec| {
-            #[cfg(not(windows))]
-            let glob_matches = matched_globs.contains(&spec.glob_index);
-
-            #[cfg(windows)]
-            let glob_matches = false;
-
-            glob_matches
-                || spec
-                    .prefix
-                    .as_ref()
-                    .is_some_and(|prefix| path_matches_prefix(path, prefix))
-        })
+        self.prefixes
+            .iter()
+            .any(|prefix| path_matches_prefix(path, prefix))
     }
 }
 

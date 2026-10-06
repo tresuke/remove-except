@@ -32,7 +32,8 @@ pub(super) fn path_matches_prefix(path: &str, prefix: &str) -> bool {
 pub(super) fn paths_equal(left: &str, right: &str) -> bool {
     #[cfg(windows)]
     {
-        simple_case_fold(left) == simple_case_fold(right)
+        left.case_fold_with(Variant::Simple, Locale::NonTurkic)
+            .eq(right.case_fold_with(Variant::Simple, Locale::NonTurkic))
     }
     #[cfg(not(windows))]
     {
@@ -48,13 +49,6 @@ fn strip_path_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
         prefix_bytes = index + character.len_utf8();
     }
     paths_equal(&path[..prefix_bytes], prefix).then_some(&path[prefix_bytes..])
-}
-
-#[cfg(windows)]
-fn simple_case_fold(value: &str) -> String {
-    value
-        .case_fold_with(Variant::Simple, Locale::NonTurkic)
-        .collect()
 }
 
 pub(super) fn is_absolute_pattern(pattern: &str) -> bool {
@@ -89,18 +83,30 @@ pub(super) fn is_filesystem_root(path: &Path) -> bool {
 
 /// 相対パスをプラットフォームに依存しない `/` 区切りの表示形式にします。
 pub(super) fn display_path(path: &Path) -> String {
-    path.components()
-        .filter_map(|component| match component {
-            Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("/")
+    let mut display_path = String::with_capacity(path.as_os_str().len());
+    for component in path.components() {
+        if let Component::Normal(value) = component {
+            if !display_path.is_empty() {
+                display_path.push('/');
+            }
+            display_path.push_str(&value.to_string_lossy());
+        }
+    }
+    display_path
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{path_matches_prefix, paths_equal};
+    use super::{display_path, path_matches_prefix, paths_equal};
+    use std::path::Path;
+
+    #[test]
+    fn display_path_joins_normal_components_and_skips_others() {
+        assert_eq!(
+            display_path(Path::new("./keep/../nested/file.txt")),
+            "keep/nested/file.txt"
+        );
+    }
 
     #[test]
     fn path_case_comparison_matches_platform_policy() {

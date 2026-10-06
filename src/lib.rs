@@ -7,8 +7,7 @@
 //! ケース照合はWindowsではUnicode単純ケースフォールド（非トルコ語）、Ubuntuでは
 //! 大文字小文字を区別します。Windowsのディレクトリ単位のケースセンシティブ設定には追従しません。
 
-use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use walkdir::WalkDir;
@@ -75,12 +74,18 @@ pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
     }
 
     let compiled_patterns = compile_patterns(&root, patterns)?;
-    let mut kept_paths = HashSet::new();
     let mut entries = Vec::new();
+    // WalkDirは深さ優先で項目を返すため、現在項目の祖先ディレクトリのindexを保持する。
+    let mut directory_stack = Vec::new();
     let mut direct_match_count = 0;
 
     for entry in WalkDir::new(&root).follow_links(false).min_depth(1) {
         let entry = entry.with_context(|| "Failed to walk root directory")?;
+        let depth = entry.depth();
+        directory_stack.truncate(depth.saturating_sub(1));
+        // 親は子より先に訪れるため、そのindexは常に現在項目より小さい。
+        let parent_index = directory_stack.last().copied();
+        let file_type = entry.file_type();
         let path = entry.path().to_path_buf();
         let relative = path
             .strip_prefix(&root)
@@ -90,20 +95,8 @@ pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
 
         if matched {
             direct_match_count += 1;
-            let mut current = Some(path.as_path());
-            while let Some(path) = current {
-                if !path.starts_with(&root) {
-                    break;
-                }
-                kept_paths.insert(path.to_path_buf());
-                if path == root {
-                    break;
-                }
-                current = path.parent();
-            }
         }
 
-        let file_type = entry.file_type();
         let item_type = if file_type.is_symlink() {
             ItemType::Symlink
         } else if file_type.is_dir() {
@@ -111,49 +104,82 @@ pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
         } else {
             ItemType::File
         };
-        entries.push(PlannedItem {
-            path,
-            relative_path,
-            item_type,
+        let item_index = entries.len();
+        entries.push(IndexedItem {
+            item: PlannedItem {
+                path,
+                relative_path,
+                item_type,
+            },
+            parent_index,
+            keep: matched,
+            is_delete_root: false,
         });
+        if item_type == ItemType::Directory {
+            directory_stack.push(item_index);
+        }
     }
 
-    let (mut keep_items, mut delete_items): (Vec<_>, Vec<_>) = entries
-        .into_iter()
-        .partition(|item| kept_paths.contains(&item.path));
-    keep_items.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    delete_items.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok(finalize_plan(root, direct_match_count, entries))
+}
 
-    let deleted_directories: HashSet<_> = delete_items
-        .iter()
-        .filter(|item| item.item_type == ItemType::Directory)
-        .map(|item| item.path.as_path())
-        .collect();
-    let delete_roots = delete_items
-        .iter()
-        .filter(|item| {
-            let mut parent = item.path.parent();
-            while let Some(path) = parent {
-                if path == root {
-                    break;
-                }
-                if deleted_directories.contains(path) {
-                    return false;
-                }
-                parent = path.parent();
+/// 走査時に記録した親indexから保持祖先と最上位の削除項目を確定します。
+fn finalize_plan(
+    root: PathBuf,
+    direct_match_count: usize,
+    mut entries: Vec<IndexedItem>,
+) -> RemovalPlan {
+    // 子は親より後ろにあるため、逆順にたどって一致項目から祖先へ保持状態を伝播する。
+    for index in (0..entries.len()).rev() {
+        if entries[index].keep
+            && let Some(parent_index) = entries[index].parent_index
+        {
+            entries[parent_index].keep = true;
+        }
+    }
+
+    // 保持されない項目の親が保持対象か処理ルートなら、その項目を削除ルートとする。
+    for index in 0..entries.len() {
+        let parent_is_kept = entries[index]
+            .parent_index
+            .is_none_or(|parent_index| entries[parent_index].keep);
+        entries[index].is_delete_root = !entries[index].keep && parent_is_kept;
+    }
+
+    entries.sort_unstable_by(|left, right| left.item.relative_path.cmp(&right.item.relative_path));
+    let mut keep_items = Vec::new();
+    let mut delete_items = Vec::new();
+    let mut delete_roots = Vec::new();
+    for entry in entries {
+        if entry.keep {
+            keep_items.push(entry.item);
+        } else {
+            if entry.is_delete_root {
+                delete_roots.push(entry.item.clone());
             }
-            true
-        })
-        .cloned()
-        .collect();
+            delete_items.push(entry.item);
+        }
+    }
 
-    Ok(RemovalPlan {
+    RemovalPlan {
         root,
         direct_match_count,
         keep_items,
         delete_items,
         delete_roots,
-    })
+    }
+}
+
+/// 走査順序を使って保持祖先と最上位の削除項目を導出するための情報です。
+struct IndexedItem {
+    /// 公開計画に含める項目です。
+    item: PlannedItem,
+    /// 処理ルート直下でない場合、走査順序ベクター内にある親ディレクトリーのindexです。
+    parent_index: Option<usize>,
+    /// 直接一致で初期化し、一致項目の祖先へ保持状態を伝播します。
+    keep: bool,
+    /// 実際の削除処理に渡す最上位項目の場合にtrueです。
+    is_delete_root: bool,
 }
 
 #[cfg(test)]

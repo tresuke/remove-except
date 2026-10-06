@@ -252,4 +252,24 @@ WindowsからUbuntuで同じRust検証を行う場合は、リポジトリルー
 .\local-test-tools\Test-Rust-WSL.ps1
 ```
 
+### パフォーマンス計測
+
+計画生成のベンチマークは、標準ライブラリと既存の開発依存関係だけを使い、一時fixtureを作成してから `build_plan` を計測します。fixture作成時間は計測に含めません。2,080項目の広い構成で単一glob・複数glob・リテラルディレクトリー・全項目保持を、8,208項目の構成で疎一致・全項目保持を、さらに深い構成での一致を比較します。
+
+```sh
+cargo bench --bench plan_generation
+cargo bench --bench plan_generation -- --samples 15 --iterations 5
+```
+
+各ケースの中央値、サンプル範囲、走査項目数、パターン数、概算項目/秒を表示します。比較時は同じOS・同じマシン・同じ引数で実行し、ビルド完了後のRelease相当ベンチマーク結果を記録してください。既定値は9サンプル、各サンプル3回の計画生成です。
+
+CLI全体を計測する場合は、`hyperfine` でReleaseバイナリをdry-runします。次の例は手動fixtureを読むだけで、削除しません。
+
+```powershell
+cargo build --release
+hyperfine --warmup 3 --runs 10 'target\release\remove-except.exe --dry-run --summary both --root manual-test-workspace keep.txt keep'
+```
+
+CLI計測にはプロセス起動、計画生成、表示が含まれます。計画生成のみの計測と混同せず、fixtureの内容を比較間で同じにしてください。
+
 依存ライブラリは `Cargo.toml` で管理します。CLI は `clap`、確認プロンプトは `dialoguer`、出力装飾は `console`、glob 照合は `globset`、ディレクトリ走査は `walkdir`、エラー文脈の付与は `anyhow` を利用します。Windows向けUnicode glob照合では `regex-automata` と `unicode-casefold` を利用します。
