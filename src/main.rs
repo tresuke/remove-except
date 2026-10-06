@@ -23,6 +23,7 @@ const HELP_STYLES: Styles = Styles::styled()
     version,
     about = "Keep matching items and remove the rest under a processing root",
     long_about = "Keep items matching one or more paths or glob patterns and remove the rest under the selected root. Multiple patterns are combined with OR. Always review the plan before deleting items.",
+    after_long_help = "Output:\n  Tree: directories end with / and symlinks with @. With color, directories are blue, symlinks cyan, and kept parent directories in the delete tree green. Without color, kept parents end with +.\n  Flat: ItemType identifies each entry. Without color, directory and symlink paths end with / and @. Flat output has no kept-parent marker.\n  Status labels: PREVIEW ONLY (cyan), CONFIRM TO DELETE (yellow), FORCE DELETE (red), NO REMOVALS (green).\n  Colors are used automatically when output is a terminal and color is available.",
     styles = HELP_STYLES
 )]
 struct Args {
@@ -113,7 +114,7 @@ fn main() -> Result<()> {
     if plan.direct_match_count() == 0 {
         eprintln!(
             "WARNING: No items matched the keep patterns. Everything under {} would be removed.",
-            plan.root().display()
+            display_root_path(plan.root())
         );
     }
 
@@ -178,6 +179,46 @@ fn is_drive_relative_path(path: &Path) -> bool {
         && !bytes
             .get(2)
             .is_some_and(|separator| matches!(separator, b'/' | b'\\'))
+}
+
+fn display_root_path(path: &Path) -> String {
+    let path_text = path.to_string_lossy();
+
+    #[cfg(windows)]
+    {
+        if let Some(extended_path) = path_text.strip_prefix("\\\\?\\") {
+            let unc_path = extended_path.strip_prefix("UNC\\").or_else(|| {
+                extended_path
+                    .get(..4)
+                    .filter(|prefix| prefix.eq_ignore_ascii_case("UNC\\"))
+                    .map(|_| &extended_path[4..])
+            });
+            if let Some(unc_path) = unc_path.filter(|unc_path| {
+                is_plain_windows_display_path(unc_path)
+                    && unc_path.split('\\').filter(|part| !part.is_empty()).count() >= 2
+            }) {
+                return format!("\\\\{unc_path}");
+            }
+
+            let bytes = extended_path.as_bytes();
+            if bytes.first().is_some_and(u8::is_ascii_alphabetic)
+                && bytes.get(1) == Some(&b':')
+                && bytes.get(2) == Some(&b'\\')
+                && is_plain_windows_display_path(extended_path)
+            {
+                return extended_path.to_owned();
+            }
+        }
+    }
+
+    path_text.into_owned()
+}
+
+#[cfg(windows)]
+fn is_plain_windows_display_path(path: &str) -> bool {
+    path.split(['\\', '/']).all(|component| {
+        component.is_empty() || (!component.ends_with(' ') && !component.ends_with('.'))
+    })
 }
 
 fn confirm_deletion(has_summaries: bool) -> Result<bool> {
@@ -245,48 +286,40 @@ fn render_plan(
     sort_by_type: bool,
     colors_enabled: bool,
 ) -> io::Result<()> {
-    let mode_text = if dry_run {
-        "PREVIEW ONLY - nothing will be removed"
+    let (status_label, status_detail) = if dry_run {
+        ("PREVIEW ONLY", "Nothing will be removed")
     } else if plan.delete_roots().is_empty() {
-        "No removal operations are needed"
+        ("NO REMOVALS", "No deletion operations are needed")
     } else if force {
-        "DELETION ENABLED (--force)"
+        (
+            "FORCE DELETE",
+            "Confirmation is disabled; validation still applies",
+        )
     } else {
-        "DELETION AFTER CONFIRMATION"
+        ("CONFIRM TO DELETE", "Review both lists before confirming")
     };
     let mode = if colors_enabled {
         if dry_run {
-            style(mode_text).cyan().bold().to_string()
+            style(status_label).cyan().bold().to_string()
         } else if plan.delete_roots().is_empty() {
-            style(mode_text).green().bold().to_string()
+            style(status_label).green().bold().to_string()
         } else if force {
-            style(mode_text).red().bold().to_string()
+            style(status_label).red().bold().to_string()
         } else {
-            style(mode_text).yellow().bold().to_string()
+            style(status_label).yellow().bold().to_string()
         }
     } else {
-        mode_text.to_owned()
-    };
-    let heading = if colors_enabled {
-        style("Deletion plan:").bold().to_string()
-    } else {
-        "Deletion plan:".to_owned()
+        status_label.to_owned()
     };
 
-    writeln!(output, "{heading} {mode}")?;
-    writeln!(output, "Root: {}", plan.root().display())?;
-    writeln!(output)?;
-    if (!keep_summary && !plan.keep_items().is_empty())
-        || (!delete_summary && !plan.delete_items().is_empty())
-    {
-        let legend = if flat {
-            "Legend: blue directory, cyan symlink; without color: / directory, @ symlink"
-        } else {
-            "Legend: blue directory, cyan symlink, green kept parent; without color: / directory, @ symlink, + kept parent"
-        };
-        writeln!(output, "{legend}")?;
-        writeln!(output)?;
+    writeln!(output, "{mode}  {status_detail}")?;
+    writeln!(output, "Root: {}", display_root_path(plan.root()))?;
+    let show_legend = (!keep_summary && !plan.keep_items().is_empty())
+        || (!delete_summary && !plan.delete_items().is_empty());
+    if show_legend {
+        print_legend(output, flat, colors_enabled)?;
     }
+    writeln!(output)?;
     let options = PlanDisplayOptions {
         flat,
         sort_by_type,
@@ -314,11 +347,30 @@ fn render_plan(
         writeln!(output)?;
         writeln!(
             output,
-            "Summary sections hide item paths. Run --dry-run without --summary to inspect all paths before deleting."
+            "Summary sections omit paths. Run --dry-run without --summary to review every item before deleting."
         )?;
     }
 
     Ok(())
+}
+
+fn print_legend(output: &mut impl Write, flat: bool, colors_enabled: bool) -> io::Result<()> {
+    if colors_enabled {
+        write!(
+            output,
+            "Colors: directories ({}); symlinks ({})",
+            style("blue").blue(),
+            style("cyan").cyan()
+        )?;
+        if !flat {
+            write!(output, "; kept parents ({})", style("green").green())?;
+        }
+        writeln!(output, ".")
+    } else if flat {
+        writeln!(output, "Markers: / directory; @ symlink.")
+    } else {
+        writeln!(output, "Markers: / directory; @ symlink; + kept parent.")
+    }
 }
 
 fn print_item_section(
@@ -340,18 +392,31 @@ fn print_item_section(
     };
 
     if summary_only {
-        writeln!(output, "{title} summary:")?;
+        let summary_title = if is_keep_section { "KEEP" } else { "DELETE" };
+        writeln!(output, "{summary_title}:")?;
         if is_keep_section {
+            let item_label = if items.len() == 1 { "item" } else { "items" };
+            let match_label = if options.direct_match_count == 1 {
+                "match"
+            } else {
+                "matches"
+            };
             writeln!(
                 output,
-                "  {} kept items (includes ancestor directories); {} direct pattern matches",
+                "  {} kept {item_label} (including required ancestors); {} direct pattern {match_label}",
                 items.len(),
                 options.direct_match_count
             )?;
         } else {
+            let item_label = if items.len() == 1 { "item" } else { "items" };
+            let operation_label = if options.delete_root_count == 1 {
+                "operation"
+            } else {
+                "operations"
+            };
             writeln!(
                 output,
-                "  {} delete items; {} top-level removal operations",
+                "  {} deletion {item_label}; {} top-level deletion {operation_label}",
                 items.len(),
                 options.delete_root_count
             )?;
@@ -565,12 +630,38 @@ mod tests {
     use clap::CommandFactory;
     use remove_except::{ItemType, build_plan};
 
+    #[cfg(windows)]
+    use super::display_root_path;
+
     #[test]
     // ツリー表示用の接尾辞がディレクトリとシンボリックリンクを識別することを確認する。
     fn tree_item_suffix_identifies_directories_and_symlinks() {
         assert_eq!(tree_item_suffix(ItemType::Directory), "/");
         assert_eq!(tree_item_suffix(ItemType::File), "");
         assert_eq!(tree_item_suffix(ItemType::Symlink), "@");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn display_root_path_shortens_standard_extended_drive_and_unc_paths() {
+        assert_eq!(
+            display_root_path(std::path::Path::new(r"\\?\S:\work\project")),
+            r"S:\work\project"
+        );
+        assert_eq!(
+            display_root_path(std::path::Path::new(r"\\?\UNC\server\share\project")),
+            r"\\server\share\project"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn display_root_path_preserves_extended_prefix_for_special_components() {
+        let special_path = r"\\?\S:\work\name.";
+        assert_eq!(
+            display_root_path(std::path::Path::new(special_path)),
+            special_path
+        );
     }
 
     #[test]
@@ -667,7 +758,15 @@ mod tests {
         )
         .unwrap();
         let plain_output = String::from_utf8(plain_output).unwrap();
-        assert!(plain_output.starts_with("Deletion plan: PREVIEW ONLY"));
+        assert!(plain_output.starts_with("PREVIEW ONLY  Nothing will be removed"));
+        let plain_lines: Vec<_> = plain_output.lines().collect();
+        assert!(plain_lines[1].starts_with("Root: "));
+        assert_eq!(
+            plain_lines[2],
+            "Markers: / directory; @ symlink; + kept parent."
+        );
+        assert!(plain_lines[3].is_empty());
+        assert!(plain_output.contains("Markers: / directory; @ symlink; + kept parent."));
         assert!(plain_output.contains("group/+"));
         assert!(!plain_output.contains('\u{1b}'));
 
@@ -688,10 +787,98 @@ mod tests {
         .unwrap();
         console::set_colors_enabled(colors_were_enabled);
         let colored_output = String::from_utf8(colored_output).unwrap();
-        assert!(colored_output.contains("\u{1b}[1mDeletion plan:"));
         assert!(colored_output.contains("\u{1b}[36m\u{1b}[1mPREVIEW ONLY"));
+        assert!(colored_output.contains("Colors: directories ("));
+        assert!(colored_output.contains("blue"));
+        assert!(colored_output.contains("symlinks ("));
+        assert!(colored_output.contains("cyan"));
+        assert!(colored_output.contains("kept parents ("));
+        assert!(colored_output.contains("green"));
+        assert!(colored_output.contains("directories (\u{1b}[34mblue"));
+        assert!(colored_output.contains("symlinks (\u{1b}[36mcyan"));
+        assert!(colored_output.contains("kept parents (\u{1b}[32mgreen"));
+        let colored_lines: Vec<_> = colored_output.lines().collect();
+        assert!(colored_lines[1].starts_with("Root: "));
+        assert!(colored_lines[2].starts_with("Colors: "));
+        assert!(colored_lines[3].is_empty());
         assert!(colored_output.contains("\u{1b}[32m\u{1b}[1mgroup/"));
         assert!(colored_output.contains("remove.txt"));
+
+        let mut flat_output = Vec::new();
+        render_plan(
+            &mut flat_output,
+            &plan,
+            true,
+            false,
+            false,
+            false,
+            true,
+            false,
+            true,
+        )
+        .unwrap();
+        let flat_output = String::from_utf8(flat_output).unwrap();
+        assert!(flat_output.contains("Colors: directories ("));
+        assert!(flat_output.contains("blue"));
+        assert!(flat_output.contains("symlinks ("));
+        assert!(flat_output.contains("cyan"));
+        assert!(flat_output.contains("directories (\u{1b}[34mblue"));
+        assert!(flat_output.contains("symlinks (\u{1b}[36mcyan"));
+        assert!(!flat_output.contains("kept parents green"));
+    }
+
+    #[test]
+    fn render_plan_uses_distinct_status_labels_for_each_execution_mode() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("keep.txt").write_str("keep").unwrap();
+        temp.child("remove.txt").write_str("remove").unwrap();
+        let plan_with_deletions = build_plan(temp.path(), &["keep.txt".to_owned()]).unwrap();
+        let plan_without_deletions = build_plan(temp.path(), &[".".to_owned()]).unwrap();
+
+        let render_status = |plan: &remove_except::RemovalPlan, dry_run, force, colors_enabled| {
+            let mut output = Vec::new();
+            render_plan(
+                &mut output,
+                plan,
+                dry_run,
+                force,
+                false,
+                false,
+                false,
+                false,
+                colors_enabled,
+            )
+            .unwrap();
+            String::from_utf8(output).unwrap()
+        };
+
+        assert!(
+            render_status(&plan_with_deletions, true, false, false)
+                .starts_with("PREVIEW ONLY  Nothing will be removed")
+        );
+        assert!(
+            render_status(&plan_with_deletions, false, false, false)
+                .starts_with("CONFIRM TO DELETE  Review both lists before confirming")
+        );
+        assert!(
+            render_status(&plan_with_deletions, false, true, false)
+                .starts_with("FORCE DELETE  Confirmation is disabled; validation still applies")
+        );
+        assert!(
+            render_status(&plan_without_deletions, false, false, false)
+                .starts_with("NO REMOVALS  No deletion operations are needed")
+        );
+
+        let colors_were_enabled = console::colors_enabled();
+        console::set_colors_enabled(true);
+        let confirm_output = render_status(&plan_with_deletions, false, false, true);
+        let force_output = render_status(&plan_with_deletions, false, true, true);
+        let no_removals_output = render_status(&plan_without_deletions, false, false, true);
+        console::set_colors_enabled(colors_were_enabled);
+
+        assert!(confirm_output.contains("\u{1b}[33m"));
+        assert!(force_output.contains("\u{1b}[31m"));
+        assert!(no_removals_output.contains("\u{1b}[32m"));
     }
 
     #[test]

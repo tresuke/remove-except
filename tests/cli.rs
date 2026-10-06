@@ -19,7 +19,7 @@ fn dry_run_lists_items_without_removing_them() {
         .clone();
 
     let output = String::from_utf8_lossy(&output);
-    assert!(output.contains("PREVIEW ONLY - nothing will be removed"));
+    assert!(output.contains("PREVIEW ONLY  Nothing will be removed"));
     assert!(output.contains("Items to keep (1):"));
     assert!(output.contains("keep.txt"));
     assert!(output.contains("Items to delete (1):"));
@@ -47,7 +47,21 @@ fn relative_root_is_resolved_from_starting_directory() {
         .clone();
 
     let output = String::from_utf8_lossy(&output);
-    assert!(output.contains(&format!("Root: {}", canonical_root.display())));
+    let root_line = output
+        .lines()
+        .find(|line| line.starts_with("Root"))
+        .unwrap();
+    assert!(
+        root_line.ends_with(
+            canonical_root
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+    #[cfg(windows)]
+    assert!(!root_line.contains(r"\\?\"));
     assert!(output.contains("keep.txt"));
     assert!(output.contains("remove.txt"));
     assert!(!output.contains("outside.txt"));
@@ -258,7 +272,21 @@ fn root_symlink_processes_and_displays_its_canonical_target() {
         .clone();
 
     let output = String::from_utf8_lossy(&output);
-    assert!(output.contains(&format!("Root: {}", canonical_target.display())));
+    let root_line = output
+        .lines()
+        .find(|line| line.starts_with("Root"))
+        .unwrap();
+    assert!(
+        root_line.ends_with(
+            canonical_target
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+    #[cfg(windows)]
+    assert!(!root_line.contains(r"\\?\"));
     assert!(output.contains("remove.txt"));
     temp.child("target/remove.txt").assert("remove");
 }
@@ -339,7 +367,15 @@ fn no_match_warning_names_selected_root() {
         .stderr
         .clone();
 
-    assert!(String::from_utf8_lossy(&output).contains(&canonical_root.display().to_string()));
+    assert!(
+        String::from_utf8_lossy(&output).contains(
+            canonical_root
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
     temp.child("target/remove.txt").assert("remove");
 }
 
@@ -364,10 +400,8 @@ fn default_display_groups_directories_and_marks_kept_parents_without_root_tags()
 
     let output = String::from_utf8_lossy(&output);
     assert!(output.contains("Items to delete (5):"));
-    assert!(output.contains(
-        "Legend: blue directory, cyan symlink, green kept parent; without color: / directory, @ symlink, + kept parent"
-    ));
-    assert_eq!(output.matches("Legend:").count(), 1);
+    assert!(output.contains("Markers: / directory; @ symlink; + kept parent."));
+    assert_eq!(output.matches("Markers:").count(), 1);
     assert!(output.contains("├── alpha/"));
     assert!(output.contains("│   └── nested.txt"));
     assert!(output.contains("├── beta/"));
@@ -405,11 +439,7 @@ fn flat_option_displays_relative_paths_instead_of_a_tree() {
             .any(|line| { line.contains("Directory") && line.ends_with("nested/") })
     );
     assert!(output.contains("nested/remove.txt"));
-    assert!(
-        output.contains(
-            "Legend: blue directory, cyan symlink; without color: / directory, @ symlink"
-        )
-    );
+    assert!(output.contains("Markers: / directory; @ symlink."));
     assert!(!output.contains("└──"));
     assert!(!output.contains('\u{1b}'));
 }
@@ -537,6 +567,10 @@ fn help_documents_layout_and_summary_options() {
     assert!(output.contains("[default: tree]"));
     assert!(output.contains("--summary <SECTION>"));
     assert!(output.contains("keep, delete, or both"));
+    assert!(output.contains("Output:"));
+    assert!(output.contains("kept parent directories in the delete tree green"));
+    assert!(output.contains("Flat output has no kept-parent marker"));
+    assert!(output.contains("PREVIEW ONLY (cyan)"));
     assert!(!output.contains('\u{1b}'));
 }
 
@@ -598,9 +632,9 @@ fn keep_summary_hides_only_keep_paths() {
         .clone();
 
     let output = String::from_utf8_lossy(&output);
-    assert!(output.contains("Items to keep summary:"));
-    assert!(output.contains("1 kept items (includes ancestor directories)"));
-    assert!(output.contains("1 direct pattern matches"));
+    assert!(output.contains("KEEP:"));
+    assert!(output.contains("1 kept item (including required ancestors)"));
+    assert!(output.contains("1 direct pattern match"));
     assert!(!output.contains("keep.txt"));
     assert!(output.contains("Items to delete (1):"));
     assert!(output.contains("remove.txt"));
@@ -627,8 +661,8 @@ fn delete_summary_hides_only_delete_paths() {
     let output = String::from_utf8_lossy(&output);
     assert!(output.contains("Items to keep (1):"));
     assert!(output.contains("keep.txt"));
-    assert!(output.contains("Items to delete summary:"));
-    assert!(output.contains("1 delete items; 1 top-level removal operations"));
+    assert!(output.contains("DELETE:"));
+    assert!(output.contains("1 deletion item; 1 top-level deletion operation"));
     assert!(!output.contains("remove.txt"));
 }
 
@@ -659,6 +693,10 @@ fn summary_only_matches_both_section_summary_options() {
         .clone();
 
     assert_eq!(summary_only, both_summaries);
+    let summary_output = String::from_utf8_lossy(&summary_only);
+    assert!(summary_output.contains("KEEP:"));
+    assert!(summary_output.contains("DELETE:"));
+    assert!(summary_output.contains("Summary sections omit paths."));
     temp.child("remove.txt").assert("remove");
 }
 
@@ -762,7 +800,7 @@ fn no_removal_operations_do_not_prompt_for_confirmation() {
         .clone();
     let output = String::from_utf8_lossy(&output);
 
-    assert!(output.contains("No removal operations are needed"));
+    assert!(output.contains("NO REMOVALS  No deletion operations are needed"));
     assert!(!output.contains("Are you sure you want to delete"));
     temp.child("keep/nested/important.txt").assert("keep");
 }
@@ -827,7 +865,7 @@ fn confirmation_defaults_to_no() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stdout.contains("Summary sections hide item paths."));
+    assert!(stdout.contains("Summary sections omit paths."));
     assert!(stdout.contains("Aborted."));
     assert!(stderr.contains("Delete the plan? Summary sections do not list item paths."));
     temp.child("remove.txt").assert("remove");
