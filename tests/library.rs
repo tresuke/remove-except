@@ -38,3 +38,35 @@ fn public_api_reports_invalid_patterns_without_relying_on_error_text() {
 
     assert!(build_plan(temp.path(), &[String::new()]).is_err());
 }
+
+#[test]
+fn case_matching_uses_windows_simple_fold_and_ubuntu_sensitive_rules() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("Ä.txt").write_str("umlaut").unwrap();
+    temp.child("Keep/kept.txt").write_str("kelvin").unwrap();
+    temp.child("ß.txt").write_str("sharp s").unwrap();
+    let patterns = [
+        "ä.txt".to_owned(),
+        "Keep/kept.txt".to_owned(),
+        "SS.txt".to_owned(),
+    ];
+
+    let plan = build_plan(temp.path(), &patterns).unwrap();
+
+    assert_eq!(plan.direct_match_count(), if cfg!(windows) { 2 } else { 0 });
+    assert_eq!(plan.keep_items().is_empty(), !cfg!(windows));
+    assert!(
+        plan.keep_items()
+            .iter()
+            .any(|item| { item.relative_path() == "Ä.txt" && item.item_type() == ItemType::File })
+            == cfg!(windows)
+    );
+    assert!(
+        plan.delete_items()
+            .iter()
+            .any(|item| item.relative_path() == "ß.txt")
+    );
+    temp.child("Ä.txt").assert("umlaut");
+    temp.child("Keep/kept.txt").assert("kelvin");
+    temp.child("ß.txt").assert("sharp s");
+}

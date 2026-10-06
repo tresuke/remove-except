@@ -11,6 +11,10 @@ dialoguer = "0.12"
 globset = "0.4"
 walkdir = "2"
 
+[target.'cfg(windows)'.dependencies]
+regex-automata = "0.4"
+unicode-casefold = "0.2"
+
 [dev-dependencies]
 assert_cmd = "2"
 assert_fs = "1"

@@ -4,6 +4,8 @@
 //! 保持パターンは複数指定でき、いずれかに一致した項目とその祖先を保持します。
 //! 計画作成はファイルシステムを変更しません。返される計画は走査時点の情報であり、
 //! その後のファイルシステム変更を反映したり、削除を実行したりはしません。
+//! ケース照合はWindowsではUnicode単純ケースフォールド（非トルコ語）、Ubuntuでは
+//! 大文字小文字を区別します。Windowsのディレクトリ単位のケースセンシティブ設定には追従しません。
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -16,7 +18,7 @@ mod path;
 mod pattern;
 
 pub use model::{ItemType, PlannedItem, RemovalPlan};
-use path::{display_path, is_drive_relative_path, is_filesystem_root, path_matches_prefix};
+use path::{display_path, is_drive_relative_path, is_filesystem_root};
 use pattern::compile_patterns;
 
 /// ルート配下を走査し、保持・削除対象の計画を作成します。
@@ -72,7 +74,7 @@ pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
         bail!("Root path is not a directory: {}", root.display());
     }
 
-    let (glob_set, pattern_specs) = compile_patterns(&root, patterns)?;
+    let compiled_patterns = compile_patterns(&root, patterns)?;
     let mut kept_paths = HashSet::new();
     let mut entries = Vec::new();
     let mut direct_match_count = 0;
@@ -84,14 +86,7 @@ pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
             .strip_prefix(&root)
             .context("Walked path escaped the root directory")?;
         let relative_path = display_path(relative);
-        let matched_globs = glob_set.matches(&relative_path);
-        let matched = pattern_specs.iter().any(|spec| {
-            matched_globs.contains(&spec.glob_index)
-                || spec
-                    .prefix
-                    .as_ref()
-                    .is_some_and(|prefix| path_matches_prefix(&relative_path, prefix))
-        });
+        let matched = compiled_patterns.matches(&relative_path);
 
         if matched {
             direct_match_count += 1;
