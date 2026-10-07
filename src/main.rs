@@ -630,6 +630,8 @@ mod tests {
     use clap::CommandFactory;
     use remove_except::{ItemType, build_plan};
 
+    static COLOR_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[cfg(windows)]
     use super::display_root_path;
 
@@ -674,6 +676,7 @@ mod tests {
     #[test]
     // フラット表示でディレクトリとリンクに色を付け、ファイルは無色にすることを確認する。
     fn flat_item_styles_directories_and_symlinks_but_not_files() {
+        let _color_test_guard = COLOR_TEST_LOCK.lock().unwrap();
         let colors_were_enabled = console::colors_enabled();
         console::set_colors_enabled(true);
 
@@ -709,6 +712,7 @@ mod tests {
         }
         let plan = build_plan(temp.path(), &["kept-parent/keep.txt".to_owned()]).unwrap();
 
+        let _color_test_guard = COLOR_TEST_LOCK.lock().unwrap();
         let colors_were_enabled = console::colors_enabled();
         console::set_colors_enabled(true);
 
@@ -770,6 +774,7 @@ mod tests {
         assert!(plain_output.contains("group/+"));
         assert!(!plain_output.contains('\u{1b}'));
 
+        let _color_test_guard = COLOR_TEST_LOCK.lock().unwrap();
         let colors_were_enabled = console::colors_enabled();
         console::set_colors_enabled(true);
         let mut colored_output = Vec::new();
@@ -869,6 +874,7 @@ mod tests {
                 .starts_with("NO REMOVALS  No deletion operations are needed")
         );
 
+        let _color_test_guard = COLOR_TEST_LOCK.lock().unwrap();
         let colors_were_enabled = console::colors_enabled();
         console::set_colors_enabled(true);
         let confirm_output = render_status(&plan_with_deletions, false, false, true);
