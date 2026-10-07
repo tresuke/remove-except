@@ -28,6 +28,92 @@ fn dry_run_lists_items_without_removing_them() {
 }
 
 #[test]
+fn keep_patterns_preserve_leading_whitespace() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child(" keep.txt").write_str("leading").unwrap();
+    temp.child("keep.txt").write_str("plain").unwrap();
+
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", " keep.txt"])
+        .assert()
+        .success();
+
+    assert!(temp.path().join(" keep.txt").is_file());
+    assert!(!temp.path().join("keep.txt").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn keep_patterns_preserve_trailing_whitespace() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt ").write_str("trailing").unwrap();
+    temp.child("keep.txt").write_str("plain").unwrap();
+
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "keep.txt "])
+        .assert()
+        .success();
+
+    assert!(temp.path().join("keep.txt ").is_file());
+    assert!(!temp.path().join("keep.txt").exists());
+}
+
+#[test]
+fn keep_patterns_normalize_dot_components_and_repeated_separators() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("nested/keep.txt").write_str("keep").unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+
+    for pattern in ["nested/./keep.txt", "nested//keep.txt"] {
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["--dry-run", "--layout", "flat", pattern])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let output = String::from_utf8_lossy(&output);
+        assert!(output.contains("Items to keep (2):"), "pattern: {pattern}");
+        assert!(output.contains("nested/keep.txt"), "pattern: {pattern}");
+        assert!(output.contains("remove.txt"), "pattern: {pattern}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn preview_escapes_control_characters_in_paths() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    std::fs::write(temp.path().join("bad\n\u{1b}[31mname.txt"), "remove").unwrap();
+
+    for layout in [None, Some("flat")] {
+        let mut command = Command::cargo_bin("remove-except").unwrap();
+        command.current_dir(temp.path()).arg("--dry-run");
+        if let Some(layout) = layout {
+            command.args(["--layout", layout]);
+        }
+        let output = command
+            .arg("keep.txt")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let output = String::from_utf8_lossy(&output);
+
+        assert!(!output.contains('\u{1b}'));
+        assert!(!output.contains("bad\n"));
+        assert!(output.contains(r"bad\n\u{1b}[31mname.txt"));
+    }
+}
+
+#[test]
 // 相対ルートが起動時ディレクトリ基準で解決され、ルート外を対象にしないことを確認する。
 fn relative_root_is_resolved_from_starting_directory() {
     let temp = assert_fs::TempDir::new().unwrap();
@@ -348,6 +434,33 @@ fn child_symlinks_are_not_traversed_or_removed_with_their_targets() {
     assert!(std::fs::symlink_metadata(&file_link).is_err());
     temp.child("outside/nested/secret.txt").assert("secret");
     temp.child("outside-file.txt").assert("file target");
+}
+
+#[cfg(windows)]
+#[test]
+fn dangling_directory_symlink_is_removed_without_following_its_target() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("root/keep.txt").write_str("keep").unwrap();
+    let target = temp.path().join("missing-target");
+    let link = temp.path().join("root/dangling-directory-link");
+
+    if std::os::windows::fs::symlink_dir(&target, &link).is_err() {
+        eprintln!(
+            "Skipping dangling directory symlink test because symlink creation is unavailable"
+        );
+        return;
+    }
+
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--root", "root", "keep.txt"])
+        .assert()
+        .success();
+
+    assert!(std::fs::symlink_metadata(&link).is_err());
+    assert!(!target.exists());
+    temp.child("root/keep.txt").assert("keep");
 }
 
 #[test]

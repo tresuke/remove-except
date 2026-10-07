@@ -89,7 +89,6 @@ pub(super) fn compile_patterns(root: &Path, patterns: &[String]) -> Result<Compi
     let mut regexes = Vec::with_capacity(patterns.len());
 
     for raw in patterns {
-        let raw = raw.trim();
         if raw.is_empty() {
             bail!("Pattern must not be empty");
         }
@@ -159,19 +158,18 @@ pub(super) fn normalize_pattern(root_text: &str, pattern: &str) -> Result<String
         let Some(relative) = strip_case_insensitive_prefix(&normalized, boundary_root) else {
             bail!("Absolute pattern is outside the processing root: {pattern}");
         };
-        Ok(relative.to_owned())
+        Ok(normalize_relative_pattern(relative))
     } else {
-        let mut relative = normalized.as_str();
-        while let Some(stripped) = relative.strip_prefix("./") {
-            relative = stripped;
-        }
-        let relative = relative.trim_matches('/');
-        Ok(if relative == "." {
-            String::new()
-        } else {
-            relative.to_owned()
-        })
+        Ok(normalize_relative_pattern(&normalized))
     }
+}
+
+fn normalize_relative_pattern(pattern: &str) -> String {
+    pattern
+        .split('/')
+        .filter(|component| !component.is_empty() && *component != ".")
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn strip_case_insensitive_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
@@ -201,6 +199,39 @@ mod normalization_tests {
         assert_eq!(normalize_pattern("/work", ".").unwrap(), "");
         assert_eq!(normalize_pattern("/work", "./").unwrap(), "");
         assert_eq!(normalize_pattern("/work", "./.").unwrap(), "");
+    }
+
+    #[test]
+    fn normalizes_dot_components_and_repeated_separators() {
+        assert_eq!(
+            normalize_pattern("/work", "nested/./keep//file.txt").unwrap(),
+            "nested/keep/file.txt"
+        );
+        assert_eq!(
+            normalize_pattern("/work", "/work/nested//./keep.txt").unwrap(),
+            "nested/keep.txt"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn normalizes_windows_separators_in_absolute_patterns() {
+        assert_eq!(
+            normalize_pattern("C:/work", r"C:\work\nested\.\keep.txt").unwrap(),
+            "nested/keep.txt"
+        );
+        assert_eq!(
+            normalize_pattern("C:/work", r"C:\work\nested\\keep.txt").unwrap(),
+            "nested/keep.txt"
+        );
+    }
+
+    #[test]
+    fn preserves_whitespace_in_patterns() {
+        assert_eq!(
+            normalize_pattern("/work", " keep.txt ").unwrap(),
+            " keep.txt "
+        );
     }
 
     #[test]

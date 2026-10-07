@@ -114,7 +114,7 @@ fn main() -> Result<()> {
     if plan.direct_match_count() == 0 {
         eprintln!(
             "WARNING: No items matched the keep patterns. Everything under {} would be removed.",
-            display_root_path(plan.root())
+            escape_control_characters(&display_root_path(plan.root()))
         );
     }
 
@@ -144,7 +144,12 @@ fn main() -> Result<()> {
     }
 
     for item in plan.delete_roots() {
-        remove_item(item).with_context(|| format!("Failed to remove {}", item.path().display()))?;
+        remove_item(item).with_context(|| {
+            format!(
+                "Failed to remove {}",
+                escape_control_characters(&item.path().to_string_lossy())
+            )
+        })?;
     }
 
     println!("Removal complete.");
@@ -212,6 +217,18 @@ fn display_root_path(path: &Path) -> String {
     }
 
     path_text.into_owned()
+}
+
+fn escape_control_characters(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        if character.is_control() {
+            escaped.extend(character.escape_debug());
+        } else {
+            escaped.push(character);
+        }
+    }
+    escaped
 }
 
 #[cfg(windows)]
@@ -313,7 +330,11 @@ fn render_plan(
     };
 
     writeln!(output, "{mode}  {status_detail}")?;
-    writeln!(output, "Root: {}", display_root_path(plan.root()))?;
+    writeln!(
+        output,
+        "Root: {}",
+        escape_control_characters(&display_root_path(plan.root()))
+    )?;
     let show_legend = (!keep_summary && !plan.keep_items().is_empty())
         || (!delete_summary && !plan.delete_items().is_empty());
     if show_legend {
@@ -448,7 +469,8 @@ fn print_item_section(
             } else {
                 tree_item_suffix(item.item_type())
             };
-            let relative_path = format!("{}{suffix}", item.relative_path());
+            let relative_path =
+                escape_control_characters(&format!("{}{suffix}", item.relative_path()));
             writeln!(
                 output,
                 "{}  {}",
@@ -510,7 +532,7 @@ fn print_tree_items(
             .map(|item| tree_item_suffix(item.item_type()))
             .unwrap_or(if is_directory { "/" } else { "" });
         let is_kept_parent = item.is_none();
-        let display_name = format!("{name}{suffix}");
+        let display_name = escape_control_characters(&format!("{name}{suffix}"));
         let display_name = if colors_enabled {
             match item.map(|item| item.item_type()) {
                 Some(ItemType::Directory) => style(display_name).blue().bold().to_string(),
@@ -611,7 +633,10 @@ fn remove_item(item: &PlannedItem) -> std::io::Result<()> {
 
 #[cfg(windows)]
 fn remove_file_or_directory_link(path: &Path) -> std::io::Result<()> {
-    if fs::metadata(path).is_ok_and(|metadata| metadata.is_dir()) {
+    use std::os::windows::fs::FileTypeExt;
+
+    let file_type = fs::symlink_metadata(path)?.file_type();
+    if file_type.is_dir() || file_type.is_symlink_dir() {
         fs::remove_dir(path)
     } else {
         fs::remove_file(path)
@@ -641,6 +666,14 @@ mod tests {
         assert_eq!(tree_item_suffix(ItemType::Directory), "/");
         assert_eq!(tree_item_suffix(ItemType::File), "");
         assert_eq!(tree_item_suffix(ItemType::Symlink), "@");
+    }
+
+    #[test]
+    fn escape_control_characters_keeps_paths_on_one_terminal_line() {
+        assert_eq!(
+            super::escape_control_characters("bad\n\u{1b}[31mname.txt"),
+            r"bad\n\u{1b}[31mname.txt"
+        );
     }
 
     #[cfg(windows)]
