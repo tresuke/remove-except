@@ -39,6 +39,7 @@
 - Rust のテストには一時ファイルシステム上の fixture を使用してください。プロセス経由の CLI 動作は `tests/cli.rs` に、ライブラリやバイナリの局所的な動作は各モジュールのテストに追加・更新してください。
 - PowerShell のプレビュー・デバッグ用スクリプトと `manual-test-workspace/` は手動確認用であり、自動テストではありません。`Prepare-Manual-Test.ps1` は既知の fixture ファイルを作成・上書きし、条件を満たす既知の symlink fixture を更新します。手動テストの準備が必要な場合以外は実行しないでください。fixture 外のファイルや別リンクは削除しないでください。
 - Rust の変更後は `cargo fmt --check` と `cargo test` を実行してください。可能であれば、特にコードの追加や構造変更を行った場合は `cargo clippy --all-targets -- -D warnings` も実行してください。
+- WSL でコマンドを実行する場合、`wsl.exe -d Ubuntu-26.04 -- <command>` は Bash を起動せず、`~/.bashrc` の設定も読み込みません。非対話の Bash も通常 `~/.bashrc` の非対話ガードで終了するため、Cargo など `~/.cargo/bin` にある Linux ツールを使うスクリプトでは `PATH="$HOME/.cargo/bin:$PATH"` を明示するか実行ファイルを絶対パスで指定してください。Windows 側の `/mnt/.../*.exe` ではなく、Ubuntu にインストールされた Linux 版を使ってください。
 - Rust Doc コメントや公開APIの説明を変更した場合は `cargo doc --no-deps` も実行し、ドキュメント生成を確認してください。
 - ユーザー向けの動作を変更した場合は、該当する README の説明を更新し、例を実装と一致させてください。
 - 性能変更は `benches/plan_generation.rs` の一時fixtureを使い、Release設定で変更前後を比較してください。fixture作成と最初のwarm-upは計測区間外です。現在のケース（広い2,080項目、疎一致・全項目保持の8,208項目、深い48項目）を維持し、保持率やglob数を変えた変更では該当ケースを重視してください。

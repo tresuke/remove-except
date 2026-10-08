@@ -267,7 +267,7 @@ CLI全体を計測する場合は、`hyperfine` でReleaseバイナリをdry-run
 
 ```powershell
 cargo build --release
-hyperfine --warmup 3 --runs 10 'target\release\remove-except.exe --dry-run --summary both --root manual-test-workspace keep.txt keep'
+hyperfine --warmup 3 --runs 10 'target/release/remove-except.exe --dry-run --summary both --root manual-test-workspace keep.txt keep'
 ```
 
 CLI計測にはプロセス起動、計画生成、表示が含まれます。計画生成のみの計測と混同せず、fixtureの内容を比較間で同じにしてください。
