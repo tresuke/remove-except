@@ -1,49 +1,49 @@
-# エージェント向け指示
+# Agent Instructions
 
-## プロジェクトの方針
+## Project Policy
 
-- 主な実装対象は Rust CLI です。既存の PowerShell と Bash のスクリプトは、Rust 版の仕様や動作を比較するための参考実装であり、並行して機能を保守する対象ではありません。依頼がない限り、機能追加、書き換え、削除を行わないでください。
-- パッケージ名とコマンド名は `remove-except` のまま維持してください。
-- CLI の位置引数は「残すパスまたは glob パターン」です。コマンド名・パッケージ名を変更せず、引数の意味はヘルプと README で明示してください。
-- 保持パターンは 1 個以上必須で、複数指定時は OR 条件（いずれかに一致すれば保持）です。`--dry-run` の短縮形は `-n`、`--force` の短縮形は `-f` とし、長い形式も維持してください。
-- ユーザー向けの動作仕様は `README.md` を正とし、CLI の動作を変更した場合は README も更新してください。
-- 検討で確定した仕様・設計・運用がこのファイルの記載から乖離した場合は、乖離点と更新案を示してユーザーの確認を得てから `AGENTS.md` を更新してください。同じセッション中にユーザーが確認なしの更新を明示的に許可した場合は、その許可範囲内で追加確認せず更新して構いません。この許可は当該セッションに限り、次のセッションへ引き継がないでください。未確定の案や一時的な作業状況は恒久ルールとして追加しないでください。
-- README の一般仕様は配布後の Rust CLI 利用者向けに書き、汎用的なディレクトリ例と `remove-except` コマンドを使ってください。PowerShell/Bash スクリプトや手動 fixture の準備方法は開発者向けの節に分けてください。
-- 依存関係は `Cargo.toml` の採用済みクレート（実行時: `clap`、`globset`、`walkdir`、`dialoguer`、`anyhow`、`console`。Windows専用: `regex-automata`、`unicode-casefold`。テスト: `assert_cmd`、`assert_fs`）を維持してください。既存クレートで実現できる機能のために依存関係を追加しないでください。独自のドメインエラー型が必要になった場合は `thiserror` の追加または `anyhow` からの切り替えを検討してください。
-- コミットメッセージは日本語で記述し、1 行目に概要を書き、2 行目を空行にし、3 行目以降に `-` で始まる箇条書きで詳細を書いてください。
+- The primary implementation is the Rust CLI. The existing PowerShell and Bash scripts are reference implementations for comparing specifications and behavior with the Rust version; they are not maintained as parallel feature implementations. Do not add features, rewrite, or remove them unless requested.
+- Keep the package name and command name as `remove-except`.
+- CLI positional arguments are paths or glob patterns to keep. Do not change the command or package name, and explain the argument meaning in the help and both READMEs.
+- At least one keep pattern is required. Multiple patterns use OR semantics: an item is kept if it matches any pattern. Preserve the short forms `-n` for `--dry-run` and `-f` for `--force`, as well as the long forms.
+- `README.ja.md` is the source of truth for user-facing behavior. `README.md` is its English counterpart. Update both in the same change whenever CLI behavior or user-facing specifications change.
+- If confirmed specifications, designs, or operational practices diverge from this file, describe the divergence and proposed update and obtain the user's approval before changing `AGENTS.md`. If the user explicitly permits an update without further confirmation during the same session, update only within that scope; this permission does not carry over to later sessions. Do not add undecided proposals or temporary work status as permanent rules.
+- Write the general specifications in both READMEs for users of the distributed Rust CLI, using generic directory examples and the `remove-except` command. Put PowerShell/Bash scripts and manual fixture setup instructions in developer sections.
+- Keep the dependencies already adopted in `Cargo.toml` (runtime: `clap`, `globset`, `walkdir`, `dialoguer`, `anyhow`, `console`; Windows-only: `regex-automata`, `unicode-casefold`; tests: `assert_cmd`, `assert_fs`). Do not add dependencies for functionality available from existing crates. If a custom domain error type is needed, consider adding `thiserror` or replacing `anyhow`.
+- Write commit messages in English. Put a summary on the first line, leave the second line blank, and use `-`-prefixed bullets for details starting on the third line.
 
-## 安全性と動作
+## Safety and Behavior
 
-- このプログラムはファイルを削除します。検証・削除計画の作成と実際の削除を分離し、確認前にプレビューを表示する流れを維持してください。`--dry-run` はファイルシステムを変更してはいけません。`--force` が省略するのは確認だけであり、検証を回避してはいけません。
-- 保持パターンに一致する項目がない場合、処理ルート配下の全項目が削除対象になります。警告を維持し、特に `--force` を使う場合は、一致なしが意図どおりかを事前に確認してください。
-- プレビューと通常実行の確認前表示には、保持項目と削除項目の両方を含めてください。保持項目にはパターン一致項目と必要な祖先を含め、削除項目とは別セクションで表示します。
-- 既定の `--layout tree` 表示では、実ディレクトリ名をTTYで青、シンボリックリンク名をシアン、削除一覧にだけ現れる保持済み親ディレクトリを緑で表示します。色なし出力では `/` をディレクトリ、`@` をシンボリックリンク、`+` を保持済み親ディレクトリの印として使います。`!` などの削除ルート印は全件一覧に表示しません。削除一覧の各項目が削除対象であり、削除ルート数はサマリー表示でだけ別件数として示します。
-- `--layout flat` 表示でもTTYではディレクトリを青、シンボリックリンクをシアンで表示し、ファイルは無色にします。色なし出力ではディレクトリの相対パス末尾に `/`、シンボリックリンク末尾に `@` を付け、ファイルには記号を付けません。フラット表示では保持済み親ディレクトリの緑色や `+` 印を使いません。
-- 計画の冒頭は短い状態ラベルと処理ルートを表示します。dry-runは `PREVIEW ONLY`、確認後に削除する状態は `CONFIRM TO DELETE`、`--force` は `FORCE DELETE`、削除対象なしは `NO REMOVALS` とします。TTYで色が有効な場合は順にシアン、黄色、赤、緑で状態ラベルを強調し、色なしではラベルと説明文を維持します。通常のWindowsドライブパスやUNCパスでは表示上 `\\?\` を省略できますが、末尾の空白・ピリオドなど曖昧になる特殊要素が含まれる場合は拡張形式を維持します。表示変換はCLIの人向け出力だけに適用し、計画の正規化済みルートや削除対象を変更してはいけません。
-- `--help` はTTYで見出し・Usage・オプション名・値を控えめに色分けし、色なしではANSI装飾を出しません。Output節にTree/Flat、色あり/色なしの記号規則を説明します。実行時Legendは全件表示時に限り、現在のレイアウトと色状態に必要な説明だけを表示します。色ありのTree/Flatでは `Colors:` に続く色名を対応する色で表示し、色なしでは `Markers:` にTreeでは `/`、`@`、`+` の意味、Flatでは `/` と `@` の意味を示します。Treeの保持済み親は色ありで緑、Flatでは保持済み親の印は使いません。
-- `--summary keep|delete|both` はパスを省いた短い件数表示にします。保持数は必要な祖先を含み、直接一致数と区別します。削除対象数と `delete_roots` の最上位削除操作数も区別して示します。summaryでパスを省略した場合は、削除前に全件表示のdry-runを案内してください。
-- 保持パターンを最低 1 つ必須にしてください。処理ルート自体は削除計画に含めず、ファイルシステムのルートや選択した処理ルートの外へ出るパスを拒否し、既存のルート・絶対パターン検証を維持してください。
-- glob のパス区切り動作を維持してください。`*` と `?` は `/` をまたがず、`**` は複数階層に一致します。文字クラス `[]` は通常の glob ルールに従います。処理ルートを表す `.` または `./` はルート配下全体を保持します。glob を含まないディレクトリ指定は配下全体を保持します。glob に一致した場合は、一致項目とその祖先を保持し、一致していない子孫は保持しません。`dir/*` は `dir` 直下の項目に一致し、子ディレクトリの配下までは再帰保持しません。
-- 処理ルート配下のシンボリックリンクをたどらないでください。シンボリックリンクはそれ自体を 1 項目として扱い、削除時もリンク先ではなくリンクだけを削除してください。ルートに指定されたシンボリックリンクは正規化後のリンク先を処理します。
-- 大文字・小文字の照合はツール独自の規則に従ってください。Windows ではUnicode単純ケースフォールド（非トルコ語）で照合し、Ubuntuでは区別します。WindowsのNTFSディレクトリ単位ケースセンシティブ設定には追従しません。サポート対象はWindowsとUbuntuです。
-- 表示、確認、削除のロジックを変更する場合も、これらの安全性を弱めないでください。
+- This program deletes files. Keep validation and removal-plan creation separate from actual deletion, and show a preview before confirmation. `--dry-run` must not modify the filesystem. `--force` skips confirmation only; it must not bypass validation.
+- If no item matches a keep pattern, every item under the processing root becomes a deletion target. Preserve the warning and, especially when using `--force`, make sure that no matches is intentional.
+- Previews and confirmation output during normal execution must show both kept items and deletion targets. Show pattern matches and required ancestors in a separate section from deletion targets.
+- In the default `--layout tree`, color real directory names blue and symbolic-link names cyan on a TTY. Color a kept parent directory that appears only in the deletion list green. Without color, use `/` for directories, `@` for symbolic links, and `+` for kept parent directories. Do not show deletion-root markers such as `!` in full listings. Every item in the deletion list is a deletion target; show the number of deletion roots only as a separate summary count.
+- In `--layout flat`, color directories blue and symbolic links cyan on a TTY; leave files uncolored. Without color, append `/` to directory relative paths and `@` to symbolic-link paths, with no marker for files. Do not use green styling or `+` markers for kept parent directories in flat layout.
+- Start each plan with a short status label and the processing root. Use `PREVIEW ONLY` for dry runs, `CONFIRM TO DELETE` when confirmation is required, `FORCE DELETE` with `--force`, and `NO REMOVALS` when there are no deletion targets. On a colored TTY, highlight these labels in cyan, yellow, red, and green, respectively; keep the labels and descriptions when color is disabled. For ordinary Windows drive and UNC paths, the human-readable display may omit `\\?\`, but retain the extended form when special components such as trailing spaces or periods would make ordinary notation ambiguous. Apply display conversion only to human-readable CLI output; never change the normalized plan root or deletion targets.
+- On a TTY, style `--help` headings, Usage, option names, and values subtly; do not emit ANSI styling when color is disabled. Document Tree/Flat and colored/uncolored marker rules in the Output section. At runtime, show a legend only for full listings and include only explanations needed for the current layout and color state. With color enabled, show the color names after `Colors:` in their respective colors. Without color, explain `/`, `@`, and `+` after `Markers:` for tree layout, and `/` and `@` for flat layout. Kept parents are green only in tree layout; flat layout has no kept-parent marker.
+- `--summary keep|delete|both` shows concise counts without paths for the selected sections. Keep counts include required ancestors and are distinct from direct matches. Distinguish deletion-item counts from the number of top-level deletion operations in `delete_roots`. When a summary omits paths, tell users to review a full dry run before deleting.
+- Require at least one keep pattern. Do not include the processing root itself in the removal plan. Reject filesystem roots and paths that escape the selected processing root, and preserve existing root and absolute-pattern validation.
+- Preserve glob path-separator behavior. `*` and `?` do not cross `/`; `**` matches across multiple levels. Character classes `[]` follow standard glob rules. `.` and `./` represent the processing root and keep everything under it. A directory path without a glob keeps all contents beneath it. A glob match keeps the matching item and its ancestors, but not unmatched descendants. `dir/*` matches items directly under `dir` and does not recursively keep the contents of child directories.
+- Do not follow symbolic links under the processing root. Treat each link as one item, and delete only the link, never its target. When the selected root is a symbolic link, process its normalized target.
+- Follow the tool's own case-matching rules. Windows uses Unicode simple case folding (non-Turkic); Ubuntu is case-sensitive. Do not follow per-directory NTFS case-sensitivity settings. Supported platforms are Windows and Ubuntu.
+- Do not weaken these safety guarantees when changing display, confirmation, or deletion logic.
 
-## コードとテスト
+## Code and Tests
 
-- `src/lib.rs` は公開APIの再エクスポートと計画作成の調整を担当します。`src/model.rs` は計画型、`src/pattern.rs` はパターン照合、`src/path.rs` はパス検証・正規化を担当します。`src/main.rs` は CLI 引数の解析、表示、確認、実行を担当します。これらの責務を維持してください。
-- 公開ライブラリAPIには Rust Doc 形式のコメントを付けてください。モジュール概要には `//!`、公開型・フィールド・関数には `///` を使い、動作仕様、戻り値の意味、安全上の制約、エラー条件を適度な粒度で説明してください。自明な処理を逐一コメントする必要はありません。
-- `RemovalPlan` の `keep_items` は保持項目と祖先、`delete_items` は削除対象全体、`delete_roots` は実削除に渡す最上位項目です。表示やAPIを変更する場合は、この役割の違いを維持し README と Rust Doc の説明も同期してください。
-- `--root` は処理ルートを選択し、省略時は起動時のカレントディレクトリを使います。相対ルートは起動時ディレクトリ基準です。filesystem root と Windows の drive-relative path は拒否し、選択したルート自体は削除計画に含めないでください。
-- 既定のプレビューは保持項目と削除項目を `--layout tree` で表示します。`--layout flat` はフラット表示です。`--sort-by-type` は `--layout flat` と併用必須で、指定時は Directory → File → Symlink の順、各種類内は相対パス順にします。指定しない場合は相対パス順です。この並べ替えは表示専用とし、削除計画や削除順を変えないでください。表示順や表示形式の仕様を変更する場合は、実装と README の記載を確認して同期してください。`--summary keep|delete|both` は選択した項目パスを省略するため、削除前に `--summary` なしの `--dry-run` で全項目を確認するよう案内してください。
-- 計画と実行結果は stdout、警告・エラー・確認プロンプトは stderr に出力してください。現在の標準出力は人向けテキストであり、安定した機械可読形式やパイプ用プロトコルを保証しません。将来形式を追加する場合も、人向け装飾・凡例を機械出力へ混在させず、stderrの診断出力と分離してください。保持パターン入力は位置引数を維持し、stdinからの一覧入力は仕様が確定するまで追加しないでください。
-- Rust のテストには一時ファイルシステム上の fixture を使用してください。プロセス経由の CLI 動作は `tests/cli.rs` に、ライブラリやバイナリの局所的な動作は各モジュールのテストに追加・更新してください。
-- PowerShell のプレビュー・デバッグ用スクリプトと `manual-test-workspace/` は手動確認用であり、自動テストではありません。`Prepare-Manual-Test.ps1` は既知の fixture ファイルを作成・上書きし、条件を満たす既知の symlink fixture を更新します。手動テストの準備が必要な場合以外は実行しないでください。fixture 外のファイルや別リンクは削除しないでください。
-- Rust の変更後は `cargo fmt --check` と `cargo test` を実行してください。可能であれば、特にコードの追加や構造変更を行った場合は `cargo clippy --all-targets -- -D warnings` も実行してください。
-- WSL でコマンドを実行する場合、`wsl.exe -d Ubuntu-26.04 -- <command>` は Bash を起動せず、`~/.bashrc` の設定も読み込みません。非対話の Bash も通常 `~/.bashrc` の非対話ガードで終了するため、Cargo など `~/.cargo/bin` にある Linux ツールを使うスクリプトでは `PATH="$HOME/.cargo/bin:$PATH"` を明示するか実行ファイルを絶対パスで指定してください。Windows 側の `/mnt/.../*.exe` ではなく、Ubuntu にインストールされた Linux 版を使ってください。
-- Rust Doc コメントや公開APIの説明を変更した場合は `cargo doc --no-deps` も実行し、ドキュメント生成を確認してください。
-- ユーザー向けの動作を変更した場合は、該当する README の説明を更新し、例を実装と一致させてください。
-- 性能変更は `benches/plan_generation.rs` の一時fixtureを使い、Release設定で変更前後を比較してください。fixture作成と最初のwarm-upは計測区間外です。現在のケース（広い2,080項目、疎一致・全項目保持の8,208項目、深い48項目）を維持し、保持率やglob数を変えた変更では該当ケースを重視してください。
-- 基本比較は同じOS・同じマシン・同じ引数の25サンプル×10反復とし、WindowsネイティブとUbuntu 26.04 WSLの両方で計測してください。Ubuntuでは `Test-Rust-WSL.ps1` で同期・検証したLinuxホーム配下のコピーを使います。OS間の絶対時間を単一の性能値として比較しないでください。
-- ベンチの中央値だけでなくサンプル範囲も確認してください。範囲が重なる小さな差は改善と断定せず、必要なら50サンプル×20反復で再測定してください。異なるケースやOSの改善率を単純に合算しないでください。採用した最適化については、性能とともに対象ケース・OS・計測条件を記録してください。
-- 8,208項目を超える実運用規模が対象になった場合は、まず50,000項目の広いfixtureを追加して両OSで測り、必要性が確認できてから100,000項目のstressケースを検討してください。大きなfixtureの生成時間は引き続き計測区間から除外します。
-- 並列走査は既定の最適化手段にしないでください。実データ相当の大規模fixtureで列挙・照合・計画整理の律速を分けて測り、CPUまたはI/Oが実際に支配的と確認できた場合に限り、順序・エラー処理・シンボリックリンク非追跡の仕様を保つ小さな試作をWindowsとUbuntuで比較してください。依存関係を追加する場合は既存の依存方針に従ってください。
+- `src/lib.rs` re-exports the public API and coordinates plan creation. `src/model.rs` defines plan types, `src/pattern.rs` handles pattern matching, and `src/path.rs` handles path validation and normalization. `src/main.rs` parses CLI arguments and handles display, confirmation, and execution. Preserve these responsibilities.
+- Document the public library API with Rust Doc comments. Use `//!` for module overviews and `///` for public types, fields, and functions. Explain behavior, return-value meaning, safety constraints, and error conditions at an appropriate level of detail. Do not comment on every self-explanatory operation.
+- In `RemovalPlan`, `keep_items` contains kept items and their ancestors, `delete_items` contains all deletion targets, and `delete_roots` contains the top-level items passed to actual deletion. Preserve these distinctions in display or API changes, and keep both READMEs and Rust Doc in sync.
+- `--root` selects the processing root and defaults to the startup current directory. Resolve relative roots from the startup directory. Reject filesystem roots and Windows drive-relative paths, and never include the selected root itself in the removal plan.
+- The default preview shows kept items and deletion targets in `--layout tree`; `--layout flat` shows a flat list. `--sort-by-type` requires `--layout flat` and sorts by Directory, File, then Symlink, with relative-path order within each type. Without it, sort by relative path. Sorting is for display only and must not change the plan or deletion order. Keep implementation and both READMEs synchronized when display order or format changes. Since `--summary keep|delete|both` omits paths in selected sections, tell users to review all items with `--dry-run` and without `--summary` before deletion.
+- Write plans and execution results to stdout, and warnings, errors, and confirmation prompts to stderr. Stdout is currently human-readable text and does not promise a stable machine-readable format or pipeline protocol. If a machine format is added later, keep human decoration and legends out of it and separate diagnostics on stderr. Keep keep-pattern input positional; do not add list input from stdin until its specification is decided.
+- Use temporary-filesystem fixtures in Rust tests. Put process-level CLI behavior in `tests/cli.rs`; add or update focused library and binary behavior tests in the relevant modules.
+- PowerShell preview/debug scripts and `manual-test-workspace/` are for manual checks, not automated tests. `Prepare-Manual-Test.ps1` creates or overwrites known fixture files and updates a known symlink fixture when it meets the expected conditions. Do not run it unless manual fixtures are needed. Do not delete files outside the fixtures or other links.
+- After Rust changes, run `cargo fmt --check` and `cargo test`. When possible, especially after adding code or changing structure, also run `cargo clippy --all-targets -- -D warnings`.
+- When running commands in WSL, `wsl.exe -d Ubuntu-26.04 -- <command>` does not start Bash or load `~/.bashrc`. Non-interactive Bash normally exits through the non-interactive guard in `~/.bashrc` as well. For scripts using Linux tools such as Cargo in `~/.cargo/bin`, explicitly set `PATH="$HOME/.cargo/bin:$PATH"` or use an absolute executable path. Use the Linux tools installed in Ubuntu, not Windows executables under `/mnt/.../*.exe`.
+- When changing Rust Doc comments or public API descriptions, also run `cargo doc --no-deps` and verify documentation generation.
+- When changing user-facing behavior, update the relevant descriptions in both READMEs and keep examples consistent with the implementation.
+- For performance changes, use the temporary fixtures in `benches/plan_generation.rs` and compare before and after in Release mode. Fixture creation and the initial warm-up are outside the measurement interval. Keep the existing cases (a broad 2,080-item tree, an 8,208-item tree with sparse matches and all items kept, and a deep 48-item tree). Emphasize relevant cases when changing keep ratios or glob counts.
+- The baseline comparison is 25 samples × 10 iterations with the same OS, machine, and arguments. Measure on both native Windows and Ubuntu 26.04 WSL. On Ubuntu, use the copy under the Linux home directory synchronized and validated by `Test-Rust-WSL.ps1`. Do not combine absolute timings across operating systems into a single performance value.
+- Review sample ranges as well as medians. Do not claim a small difference is an improvement when the ranges overlap; if needed, repeat with 50 samples × 20 iterations. Do not simply combine improvement percentages across different cases or operating systems. Record the target cases, OS, and measurement conditions for any adopted optimization.
+- If the target real-world workload exceeds 8,208 items, first add a broad 50,000-item fixture and measure it on both operating systems. Consider a 100,000-item stress case only after confirming the need. Continue excluding large-fixture generation time from the measurement interval.
+- Do not use parallel scanning as the default optimization. For a representative large fixture, separately measure enumeration, matching, and plan organization. Only if CPU or I/O is confirmed as the actual bottleneck, compare a small prototype on Windows and Ubuntu while preserving ordering, error handling, and the no-follow-symlinks behavior. Follow the existing dependency policy if adding a dependency.

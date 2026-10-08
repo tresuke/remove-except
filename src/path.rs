@@ -2,7 +2,7 @@ use std::path::{Component, Path};
 #[cfg(windows)]
 use unicode_casefold::{Locale, UnicodeCaseFold, Variant};
 
-/// パスをGlob照合用に正規化します。Windowsでは区切りと拡張パス表記も正規化します。
+/// Normalizes a path for glob matching, including separators and extended-path notation on Windows.
 pub(super) fn normalize_absolute_for_match(path: &str) -> String {
     let normalized = if cfg!(windows) {
         path.replace('\\', "/")
@@ -20,7 +20,7 @@ pub(super) fn normalize_absolute_for_match(path: &str) -> String {
     normalized
 }
 
-/// パスが指定ディレクトリとその配下に含まれるか判定します。
+/// Checks whether a path is the specified directory or is beneath it.
 pub(super) fn path_matches_prefix(path: &str, prefix: &str) -> bool {
     if prefix.is_empty() {
         return true;
@@ -81,7 +81,7 @@ pub(super) fn is_filesystem_root(path: &Path) -> bool {
         .all(|component| !matches!(component, Component::Normal(_)))
 }
 
-/// 相対パスをプラットフォームに依存しない `/` 区切りの表示形式にします。
+/// Formats a relative path for display with platform-independent `/` separators.
 pub(super) fn display_path(path: &Path) -> String {
     let mut display_path = String::with_capacity(path.as_os_str().len());
     for component in path.components() {

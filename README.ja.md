@@ -1,0 +1,277 @@
+# remove-except
+
+[English](README.md) | [日本語](README.ja.md)
+
+指定したパスや glob パターンに一致する項目だけを残し、処理ルート以下のそれ以外を削除する CLI ツールです。
+
+## 安全上の注意
+
+このツールはファイルやディレクトリを実際に削除します。処理ルートで実行する前に、必ず `--dry-run` を付けて一覧を確認してください。`--summary` を指定すると選択した一覧のパスが省略されるため、実際に削除する前に `--summary` なしの `--dry-run` で全件を確認してください。パターンに一致する項目がない場合、選択したルートの内容がすべて削除対象になります。`--root` を指定するときは表示された正規化後のパスが意図した場所か確認してください。filesystem rootは安全のため処理ルートに指定できません。
+
+## インストール
+
+ソースからインストールするには Rust 1.85 以降を用意し、リポジトリのルートで実行します。
+
+```sh
+cargo install --path .
+```
+
+インストール後は `remove-except` コマンドを実行できます。リリース用バイナリをビルドする場合は次のコマンドを使います。生成物は `target/release` 以下に作成されます。
+
+```sh
+cargo build --release
+```
+
+## 使い方
+
+書式は `remove-except [OPTIONS] <KEEP_PATTERN>...` です。保持パターンは1個以上の位置引数で指定します。複数指定した場合はいずれかに一致した項目を保持します。
+
+まず `--dry-run` で計画を確認します。
+
+```sh
+remove-except --dry-run keep.txt keep '**/*.md'
+```
+
+削除を実行するときは `--dry-run` を外します。通常は計画表示後に確認し、既定の回答はNoです。`--force` は確認だけを省略し、パターンやルートの検証は省略しません。
+
+```sh
+remove-except keep.txt keep '**/*.md'
+remove-except --force keep.txt keep '**/*.md'
+```
+
+別の処理ルートを選ぶ場合は `--root` を指定します。相対ルートはコマンド起動時のカレントディレクトリー基準で解決します。
+
+```sh
+remove-except --root work --dry-run keep.txt '**/*.md'
+```
+
+表示形式は `--layout tree|flat` で選び、既定は `tree` です。件数だけを示すセクションは `--summary keep|delete|both` で指定します。型別の並べ替えには `--layout flat` と `--sort-by-type` を組み合わせます。
+
+```sh
+remove-except --dry-run --layout flat keep.txt
+remove-except --dry-run --layout flat --sort-by-type keep.txt
+remove-except --dry-run --summary delete keep.txt
+remove-except --dry-run --summary both keep.txt
+```
+
+`--dry-run` と `--force` にはそれぞれ `-n`、`-f` の短縮形があります。すべてのオプションは `remove-except --help`、バージョンは `remove-except --version` で確認できます。
+
+保持項目数には必要な祖先ディレクトリーも含まれます。削除対象項目数には対象ディレクトリー配下の項目も含まれ、削除操作数は実際に削除関数へ渡す最上位項目の数です。
+
+### 表示とコマンド連携
+
+計画の先頭には実行状態と処理ルートを表示します。TTYでは状態ラベル `PREVIEW ONLY` をシアン、`CONFIRM TO DELETE` を黄色、`FORCE DELETE` を赤、`NO REMOVALS` を緑で強調します。色なしでも同じラベルと説明文で状態を識別できます。通常のWindowsドライブパスやUNCパスは人向け表示では `\\?\` を省きます。末尾が空白やピリオドの要素など、通常表記にすると曖昧になるパスは拡張形式を維持します。ファイル名やルートに含まれる制御文字は可視化して表示し、行や端末装飾を偽装できないようにします。内部のルートパスや削除対象は変更しません。
+
+プレビュー冒頭の例:
+
+```text
+PREVIEW ONLY  Nothing will be removed
+Root: S:\work\project
+```
+
+全体一覧では、Tree表示のディレクトリー末尾に `/`、シンボリックリンク末尾に `@` を付けます。削除一覧にだけ現れる保持済み親ディレクトリーは、色ありでは緑、色なしでは `+` で示します。Flat表示は `ItemType` と `RelativePath` の列を使い、色なしのときディレクトリーとリンクのパス末尾に `/` と `@` を付けます。Flat表示では保持済み親ディレクトリーの印は使いません。全件表示ではRootの直後に、Tree/Flatと色状態に応じて短い案内を表示します。色ありでは `Colors:` の `blue`、`cyan`、`green` をそれぞれ実際の色で表示し、色なしでは `Markers:` と記号の意味を示します。
+
+色と記号の対応表および状態ラベルは `remove-except --help` の `Output` 節にもあります。色なしでは同じ記号規則を使い、helpにもANSI装飾を付けません。サマリー表示では一覧のパスを省き、`KEEP` と `DELETE` の件数を簡潔に表示します。保持件数には必要な祖先が含まれ、直接一致したパターン数も別に示します。削除件数と実際の最上位削除操作数も別々に表示します。削除前には必ず `--summary` なしの `--dry-run` で全件を確認してください。
+
+両側をsummaryにした場合の例:
+
+```text
+KEEP:
+    1 kept item (including required ancestors); 1 direct pattern match
+DELETE:
+    14 deletion items; 8 top-level deletion operations
+
+Summary sections omit paths. Run --dry-run without --summary to review every item before deleting.
+```
+
+計画と実行結果は標準出力、警告・エラー・確認プロンプトは標準エラーに出力します。現在の入力は位置引数、表示は人向けテキストです。標準入力からの一覧読み込みや、安定した機械可読出力形式は提供していません。標準出力を別プログラムで解析する用途はサポート対象ではありません。
+
+開発中はリポジトリのルートから `cargo run --` を付けて実行できます。
+
+```sh
+cargo run -- --dry-run keep.txt keep '**/*.md'
+```
+
+## 一般仕様
+
+### 実行例
+
+次の構成で、`work` ディレクトリをカレントディレクトリにして実行する例です。
+
+```text
+work/
+├── keep.txt
+├── readme.md
+├── todo.txt
+├── reports/
+│   ├── summary.txt
+│   ├── report1.csv
+│   ├── report2.csv
+│   └── 2025/
+│       ├── annual.csv
+│       └── notes.txt
+└── archive/
+    └── old.csv
+```
+
+### glob の指定
+
+glob は保持したいパスのパターンとして指定します。複数のパターンは空白で区切ります。
+
+```sh
+remove-except --dry-run '**/*.md'
+```
+
+`readme.md` が保持され、`keep.txt`、`todo.txt`、`reports`、`archive` などは削除対象として表示されます。プレビューには保持対象と削除対象の両方が表示されます。`**` は `/` を含む任意のパスに一致するため、`**/*.md` は直下とサブディレクトリ内の `.md` ファイルに一致します。
+
+よく使う glob 記号は次のとおりです。
+
+| パターン例 | 意味 |
+| --- | --- |
+| `*.md` | カレントディレクトリ直下にある `.md` ファイルです。`*` は `/` をまたぎません。 |
+| `**/*.md` | どの階層でも `.md` で終わるパスです。`**` は `/` を含む任意のパスに一致します。 |
+| `reports/report?.csv` | `?` は `/` 以外の任意の 1 文字。例では `report1.csv` と `report2.csv` に一致します。 |
+| `reports/report[12].csv` | `[]` は指定した文字のいずれか 1 文字。例では `report1.csv` と `report2.csv` に一致します。 |
+
+特定のサブディレクトリ以下に glob を限定する場合は、そのディレクトリからの相対パスをパターンの先頭に付けます。
+
+```sh
+remove-except --dry-run 'reports/**/*.csv'
+```
+
+この例では `reports/report1.csv`、`reports/report2.csv`、`reports/2025/annual.csv` が保持されます。`**/` は0階層以上のディレクトリに一致するため、`reports/**/*.csv` は `reports` 直下とその下の階層にある `.csv` ファイルを対象にします。glob は引用符で囲んで、シェルによる事前展開を防いでください。
+
+### サブディレクトリの指定
+
+サブディレクトリ全体を残す場合は、ディレクトリ名をそのまま指定します。
+
+```sh
+remove-except --dry-run reports/2025
+```
+
+`reports/2025` とその中身はすべて保持されます。たとえば `annual.csv` と `notes.txt` は残りますが、`reports/summary.txt` や `reports/report1.csv` は削除対象です。
+
+サブディレクトリ内の 1 ファイルだけを残す場合は、ファイルまでの相対パスを指定します。
+
+```sh
+remove-except --dry-run reports/2025/annual.csv
+```
+
+この場合は `annual.csv` と親ディレクトリ `reports`、`reports/2025` が保持されます。同じディレクトリにある `notes.txt` は削除対象です。
+
+サブディレクトリ以下の特定種類のファイルだけを残す場合は、その場所と glob を組み合わせます。
+
+```sh
+remove-except --dry-run 'reports/2025/*.csv'
+```
+
+この例では `reports/2025/annual.csv` が保持され、`reports/2025/notes.txt` は削除対象です。`*` はその階層だけに一致するため、`reports/2025/*.csv` は `reports/2025` 直下の CSV に限定されます。配下の複数階層を対象にする場合は `reports/2025/**/*.csv` を使います。ディレクトリ全体を残す場合は、globではなく `reports/2025` のようにディレクトリ名を指定します。
+
+どの例も `--dry-run` で保持対象と削除対象の一覧を確認できます。実際に削除するときだけ `--dry-run` を外してください。通常実行でも両方の一覧を表示してから確認プロンプトを出します。
+
+### ルール
+
+- **処理範囲:** 既定では起動時のカレントディレクトリー以下を再帰的に処理します。`--root` を指定すると、そのディレクトリー以下を処理します。相対ルートは起動時カレントディレクトリー基準で解決します。ルート自体は計画・削除対象に含まれず、filesystem rootは安全のため拒否されます。
+- **保持パターン:** 1 個以上必須です。複数指定した場合はいずれか 1 個に一致すれば保持します。パターンは位置引数として指定し、引数の前後にある空白も名前の一部として扱います。空白を含むパターンはシェルで引用符を付けてください。
+- **パス:** 相対パターンは選択した処理ルート基準です。絶対パターンは正規化後の処理ルート配下のみ受理されます。相対パターンと、ルート接頭辞に一致した後の絶対パターン部分では、`.` 要素と連続する区切りを正規化します。絶対パターンは区切り文字を `/` にそろえてからルート接頭辞を照合しますが、その接頭辞内の `.` 要素や連続区切りは正規化しません。一致しない場合はルート外として拒否します。`..` をパス要素として含むパターン、空のパターン、Windowsの曖昧なdrive-relative path（例: `C:folder`）はエラーになります。
+- **glob:** `*`、`**`、`?`、文字クラス `[]` を利用できます。`*` と `?` は `/` をまたがず、`**` は `/` を含むパスに一致します。たとえば `*.md` は直下の `.md` ファイルに、`**/*.md` は全階層の `.md` ファイルに一致します。シェルによる事前展開を避けるため、glob は引用符で囲んでください。
+- **ディレクトリ:** 一致した項目とその親ディレクトリを保持します。glob を含まないディレクトリパスを指定すると、指定ディレクトリとその配下を保持します。`dir/*` は `dir` 直下の項目にのみ一致し、一致したサブディレクトリの中身までは保持しません。
+- **処理ルート全体を保持:** `.` または `./` は処理ルートを表し、ルート配下の全項目を保持します。
+- **大文字・小文字:** Windows ではツール独自のUnicode単純ケースフォールド（非トルコ語）で照合し、Ubuntuでは区別します。Windowsでは `ä` と `Ä`、`ß` と `ẞ` を同一視しますが、`ß` と `SS` は同一視しません。NTFSのディレクトリ単位のケースセンシティブ設定には追従しません。サポート対象はWindowsとUbuntuです。
+- **シンボリックリンク:** rootに指定したシンボリックリンクはリンク先に解決します。処理ルート配下のリンクはたどらず、リンク自体を1項目として扱います。削除対象の場合もリンクを削除し、リンク先は削除しません。
+- **表示と削除:** 既定の `--layout tree` は保持項目と削除対象をツリー表示し、`--layout flat` は `ItemType` と `RelativePath` の一覧を表示します。凡例は選択中のレイアウトと色状態に合わせます。`--sort-by-type` は `--layout flat` と併用必須で、Directory → File → Symlink、種類内は相対パス順です。指定しない場合は相対パス順です。`--summary keep|delete|both` は指定した側を短い件数表示にし、保持件数（祖先を含む）・直接一致数、削除対象数・最上位削除操作数を区別します。サマリー時はパスが省略されるため、削除前に `--summary` なしの `--dry-run` で全項目を確認してください。通常実行は表示後に確認し、既定の回答は「いいえ」です。`--force` は確認だけを省略します。
+- **標準入出力:** 計画と実行結果は標準出力、警告・エラー・確認プロンプトは標準エラーに表示します。現在は人向けテキスト表示であり、機械可読形式やパイプ入力は提供しません。将来の外部連携では `xargs` 等から位置引数へ渡す方法を想定していますが、安定したパイプ用インターフェースではありません。
+- **一致なし:** どの項目にも一致しない場合は警告を出し、全項目を削除対象とします。ドライランで必ず対象を確認してください。
+
+## 開発者向け仕様
+
+### 構成
+
+- `src/main.rs`: CLI 引数の解析、処理ルートを使った計画作成、一覧表示、確認、実ファイル削除を担当します。
+- `src/lib.rs`: crate rootの公開再エクスポートと`build_plan`による走査・計画作成の調整を担当します。
+- `src/model.rs`: 公開計画型と読み取りgetterを定義します。`src/pattern.rs` はglob照合、`src/path.rs` はパス検証と正規化を担当します。
+- `tests/cli.rs`: CLIを一時ディレクトリ上で実行し、削除・確認・表示を検証します。`tests/library.rs` は公開ライブラリAPIとOS別ケース照合を検証します。色付き・色なしの描画はバイナリの単体テストで検証します。
+
+### 手動テスト
+
+`Prepare-Manual-Test.ps1` は、Rust CLI の手動確認用に `manual-test-workspace` と fixture ファイルを作成します。`keep-link` は `keep.txt` を指すシンボリックリンクで、プレビューの `@` 凡例を確認するためのfixtureです。Windowsではシンボリックリンク作成に Developer Mode の有効化または管理者権限が必要な場合があります。リポジトリのルートで実行します。
+
+```powershell
+.\Prepare-Manual-Test.ps1
+Set-Location .\manual-test-workspace
+cargo run --manifest-path ..\Cargo.toml -- --dry-run keep.txt keep '*.md'
+```
+
+一覧では保持対象として `keep.txt`、`release-notes.md`、`keep` ディレクトリとその配下が表示され、それ以外は削除候補として表示されます。実際の削除を試す場合は `--dry-run` を外して実行し、プロンプトには `n` と回答すれば削除を中止できます。削除を実行した後は `Set-Location ..` でルートに戻り、スクリプトを再実行して既知の fixture を復元します。
+
+このスクリプトは既知の fixture ファイルを上書き・作成し、`keep-link` が `keep.txt` を指す既知のシンボリックリンクである場合だけ張り直します。フォルダ内のその他のファイルや別リンクは削除しません。別の場所に作成する場合は `-Path` で出力先を指定できます。`keep-link` に競合する通常ファイルや別リンクが存在する場合は、上書きせずエラーになります。
+
+### 計画 API
+
+ライブラリの `build_plan(root, patterns)` は、指定ルートと保持パターンから `RemovalPlan` を作成します。保持パターン未指定または空のパターン、無効なglob、ルート外の絶対パターン、親ディレクトリ移動、filesystem rootまたはディレクトリ以外をルートに指定した場合、Windowsのdrive-relative pathを指定した場合はエラーを返します。ルートの解決や走査に失敗した場合も計画作成はエラーになります。処理ルートを表す `.` と `./` は同じくルート配下全体を保持します。
+
+`RemovalPlan` と `PlannedItem` のデータは getter 経由で読み取ります。getter は参照を返すため、計画内容を変更できません。公開フィールドを直接参照していたコードは getter 呼び出しへ移行してください。
+
+```rust,no_run
+use remove_except::build_plan;
+use std::path::Path;
+
+let patterns = ["Cargo.toml".to_owned(), "src/**".to_owned()];
+let plan = build_plan(Path::new("."), &patterns).expect("valid plan");
+
+for item in plan.delete_roots() {
+    println!("{}", item.relative_path());
+}
+```
+
+`RemovalPlan` の getter:
+
+- `root()`: 正規化された処理ルート。
+- `direct_match_count()`: パターンに直接一致した項目数。一致なしの警告判定に使います。
+- `keep_items()`: 保持対象となる項目すべて。祖先ディレクトリを含み、相対パス順に並びます。
+- `delete_items()`: 削除対象となる項目すべて。相対パス順に並びます。
+- `delete_roots()`: 実削除に使う最上位項目。削除対象ディレクトリの子孫は含めず、再帰削除の重複を避けます。
+
+各 `PlannedItem` は `path()`、`relative_path()`、`item_type()` で読み取れます。相対パスは `/` 区切りです。`path()` は正規化されたルート配下の絶対パスを返します。Windowsでは標準ライブラリのcanonicalize表現により `\\?\` の拡張パスprefixが含まれる場合があります。
+
+走査時はシンボリックリンクをたどりません。計画作成後は CLI 側が `delete_roots` を削除します。削除中にファイルシステムエラーが起きた場合はエラー終了しますが、それ以前に削除済みの項目は元に戻りません。
+
+### ビルドと検証
+
+Edition 2024 を使用します。開発環境では Rust 1.85 以降を使用してください。
+
+```sh
+cargo fmt --check
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo build --release
+cargo doc --no-deps
+```
+
+WindowsからUbuntuで同じRust検証を行う場合は、リポジトリルートで次のスクリプトを実行します。
+
+```powershell
+.\local-test-tools\Test-Rust-WSL.ps1
+```
+
+### パフォーマンス計測
+
+計画生成のベンチマークは、標準ライブラリと既存の開発依存関係だけを使い、一時fixtureを作成してから `build_plan` を計測します。fixture作成時間は計測に含めません。2,080項目の広い構成で単一glob・複数glob・リテラルディレクトリー・全項目保持を、8,208項目の構成で疎一致・全項目保持を、さらに深い構成での一致を比較します。
+
+```sh
+cargo bench --bench plan_generation
+cargo bench --bench plan_generation -- --samples 25 --iterations 10
+```
+
+各ケースの中央値、サンプル範囲、走査項目数、パターン数、概算項目/秒を表示します。既定値の9サンプル×3反復は短時間の確認用です。性能比較では同じOS・同じマシン・同じ引数で25サンプル×10反復を実行し、ビルド完了後のRelease相当ベンチマーク結果を記録してください。
+
+CLI全体を計測する場合は、`hyperfine` でReleaseバイナリをdry-runします。次の例は手動fixtureを読むだけで、削除しません。
+
+```powershell
+cargo build --release
+hyperfine --warmup 3 --runs 10 'target/release/remove-except.exe --dry-run --summary both --root manual-test-workspace keep.txt keep'
+```
+
+CLI計測にはプロセス起動、計画生成、表示が含まれます。計画生成のみの計測と混同せず、fixtureの内容を比較間で同じにしてください。
+
+依存ライブラリは `Cargo.toml` で管理します。CLI は `clap`、確認プロンプトは `dialoguer`、出力装飾は `console`、glob 照合は `globset`、ディレクトリ走査は `walkdir`、エラー文脈の付与は `anyhow` を利用します。Windows向けUnicode glob照合では `regex-automata` と `unicode-casefold` を利用しています。

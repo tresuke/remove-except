@@ -1,49 +1,51 @@
 # remove-except
 
-指定したパスや glob パターンに一致する項目だけを残し、処理ルート以下のそれ以外を削除する CLI ツールです。
+[English](README.md) | [日本語](README.ja.md)
 
-## 安全上の注意
+A command-line tool that keeps only items matching the specified paths or glob patterns and removes everything else under the selected root.
 
-このツールはファイルやディレクトリを実際に削除します。処理ルートで実行する前に、必ず `--dry-run` を付けて一覧を確認してください。`--summary` を指定すると選択した一覧のパスが省略されるため、実際に削除する前に `--summary` なしの `--dry-run` で全件を確認してください。パターンに一致する項目がない場合、選択したルートの内容がすべて削除対象になります。`--root` を指定するときは表示された正規化後のパスが意図した場所か確認してください。filesystem rootは安全のため処理ルートに指定できません。
+## Safety Notice
 
-## インストール
+This tool permanently deletes files and directories. Before running it on a processing root, always use `--dry-run` and review the full list. `--summary` omits paths from the selected sections, so before deleting anything, run `--dry-run` without `--summary` to review every item. If no item matches a pattern, everything under the selected root becomes a deletion target. When using `--root`, verify that the normalized path shown is the intended location. A filesystem root cannot be selected as the processing root.
 
-ソースからインストールするには Rust 1.85 以降を用意し、リポジトリのルートで実行します。
+## Installation
+
+To install from source, install Rust 1.85 or later and run this command from the repository root.
 
 ```sh
 cargo install --path .
 ```
 
-インストール後は `remove-except` コマンドを実行できます。リリース用バイナリをビルドする場合は次のコマンドを使います。生成物は `target/release` 以下に作成されます。
+After installation, run the `remove-except` command. To build a release binary, use the following command. The binary is created under `target/release`.
 
 ```sh
 cargo build --release
 ```
 
-## 使い方
+## Usage
 
-書式は `remove-except [OPTIONS] <KEEP_PATTERN>...` です。保持パターンは1個以上の位置引数で指定します。複数指定した場合はいずれかに一致した項目を保持します。
+The syntax is `remove-except [OPTIONS] <KEEP_PATTERN>...`. Provide one or more keep patterns as positional arguments. When you specify multiple patterns, an item is kept if it matches any of them.
 
-まず `--dry-run` で計画を確認します。
+Review the plan with `--dry-run` first.
 
 ```sh
 remove-except --dry-run keep.txt keep '**/*.md'
 ```
 
-削除を実行するときは `--dry-run` を外します。通常は計画表示後に確認し、既定の回答はNoです。`--force` は確認だけを省略し、パターンやルートの検証は省略しません。
+To perform deletion, omit `--dry-run`. Normally, the tool asks for confirmation after showing the plan; the default answer is No. `--force` skips confirmation only. It does not skip pattern or root validation.
 
 ```sh
 remove-except keep.txt keep '**/*.md'
 remove-except --force keep.txt keep '**/*.md'
 ```
 
-別の処理ルートを選ぶ場合は `--root` を指定します。相対ルートはコマンド起動時のカレントディレクトリー基準で解決します。
+Use `--root` to select a different processing root. A relative root is resolved from the current directory when the command starts.
 
 ```sh
 remove-except --root work --dry-run keep.txt '**/*.md'
 ```
 
-表示形式は `--layout tree|flat` で選び、既定は `tree` です。件数だけを示すセクションは `--summary keep|delete|both` で指定します。型別の並べ替えには `--layout flat` と `--sort-by-type` を組み合わせます。
+Choose the output layout with `--layout tree|flat`; the default is `tree`. Use `--summary keep|delete|both` to show counts instead of paths in the selected sections. To sort by item type, combine `--sort-by-type` with `--layout flat`.
 
 ```sh
 remove-except --dry-run --layout flat keep.txt
@@ -52,26 +54,26 @@ remove-except --dry-run --summary delete keep.txt
 remove-except --dry-run --summary both keep.txt
 ```
 
-`--dry-run` と `--force` にはそれぞれ `-n`、`-f` の短縮形があります。すべてのオプションは `remove-except --help`、バージョンは `remove-except --version` で確認できます。
+The short forms of `--dry-run` and `--force` are `-n` and `-f`. See all options with `remove-except --help` and the version with `remove-except --version`.
 
-保持項目数には必要な祖先ディレクトリーも含まれます。削除対象項目数には対象ディレクトリー配下の項目も含まれ、削除操作数は実際に削除関数へ渡す最上位項目の数です。
+The keep count includes required ancestor directories. The deletion-item count includes descendants of deletion-target directories, while the deletion-operation count is the number of top-level items passed to the deletion routine.
 
-### 表示とコマンド連携
+### Display and Command Integration
 
-計画の先頭には実行状態と処理ルートを表示します。TTYでは状態ラベル `PREVIEW ONLY` をシアン、`CONFIRM TO DELETE` を黄色、`FORCE DELETE` を赤、`NO REMOVALS` を緑で強調します。色なしでも同じラベルと説明文で状態を識別できます。通常のWindowsドライブパスやUNCパスは人向け表示では `\\?\` を省きます。末尾が空白やピリオドの要素など、通常表記にすると曖昧になるパスは拡張形式を維持します。ファイル名やルートに含まれる制御文字は可視化して表示し、行や端末装飾を偽装できないようにします。内部のルートパスや削除対象は変更しません。
+The plan starts with the execution status and processing root. On a TTY, the status labels `PREVIEW ONLY`, `CONFIRM TO DELETE`, `FORCE DELETE`, and `NO REMOVALS` are highlighted in cyan, yellow, red, and green, respectively. The same labels and descriptions identify each state when color is disabled. For human-readable output, ordinary Windows drive and UNC paths omit the `\\?\` prefix. Paths that would become ambiguous in ordinary notation, such as components ending in a space or period, retain the extended form. Control characters in file names and roots are rendered visibly to prevent line or terminal-decoration spoofing. Display formatting does not change the internal root path or deletion targets.
 
-プレビュー冒頭の例:
+Preview header example:
 
 ```text
 PREVIEW ONLY  Nothing will be removed
 Root: S:\work\project
 ```
 
-全体一覧では、Tree表示のディレクトリー末尾に `/`、シンボリックリンク末尾に `@` を付けます。削除一覧にだけ現れる保持済み親ディレクトリーは、色ありでは緑、色なしでは `+` で示します。Flat表示は `ItemType` と `RelativePath` の列を使い、色なしのときディレクトリーとリンクのパス末尾に `/` と `@` を付けます。Flat表示では保持済み親ディレクトリーの印は使いません。全件表示ではRootの直後に、Tree/Flatと色状態に応じて短い案内を表示します。色ありでは `Colors:` の `blue`、`cyan`、`green` をそれぞれ実際の色で表示し、色なしでは `Markers:` と記号の意味を示します。
+In full listings, tree layout appends `/` to directory names and `@` to symbolic-link names. A retained parent directory that appears only in the deletion list is shown in green when color is enabled and marked with `+` when color is disabled. Flat layout uses `ItemType` and `RelativePath` columns; without color, directory and link paths end in `/` and `@`, respectively. Flat layout does not mark retained parent directories. In full listings, a brief legend appears immediately after the root and reflects the selected layout and color state. With color enabled, the names `blue`, `cyan`, and `green` following `Colors:` use their respective colors. Without color, `Markers:` explains the symbols.
 
-色と記号の対応表および状態ラベルは `remove-except --help` の `Output` 節にもあります。色なしでは同じ記号規則を使い、helpにもANSI装飾を付けません。サマリー表示では一覧のパスを省き、`KEEP` と `DELETE` の件数を簡潔に表示します。保持件数には必要な祖先が含まれ、直接一致したパターン数も別に示します。削除件数と実際の最上位削除操作数も別々に表示します。削除前には必ず `--summary` なしの `--dry-run` で全件を確認してください。
+The color and marker meanings and status labels are also documented in the `Output` section of `remove-except --help`. When color is disabled, the same markers are used and help output has no ANSI styling. Summary output omits item paths and briefly reports counts in the `KEEP` and `DELETE` sections. The keep count includes required ancestors and separately reports direct pattern matches. The number of deletion items and the number of top-level deletion operations are also shown separately. Before deleting, always review every item with `--dry-run` and without `--summary`.
 
-両側をsummaryにした場合の例:
+Example with summaries for both sections:
 
 ```text
 KEEP:
@@ -82,19 +84,19 @@ DELETE:
 Summary sections omit paths. Run --dry-run without --summary to review every item before deleting.
 ```
 
-計画と実行結果は標準出力、警告・エラー・確認プロンプトは標準エラーに出力します。現在の入力は位置引数、表示は人向けテキストです。標準入力からの一覧読み込みや、安定した機械可読出力形式は提供していません。標準出力を別プログラムで解析する用途はサポート対象ではありません。
+Plans and execution results are written to standard output. Warnings, errors, and confirmation prompts are written to standard error. Inputs are currently positional arguments and output is human-readable text. Reading patterns from standard input and stable machine-readable output are not supported. Parsing standard output from another program is not a supported use case.
 
-開発中はリポジトリのルートから `cargo run --` を付けて実行できます。
+During development, run the tool from the repository root with `cargo run --`.
 
 ```sh
 cargo run -- --dry-run keep.txt keep '**/*.md'
 ```
 
-## 一般仕様
+## General Specification
 
-### 実行例
+### Example
 
-次の構成で、`work` ディレクトリをカレントディレクトリにして実行する例です。
+The following example assumes `work` is the current directory.
 
 ```text
 work/
@@ -112,87 +114,96 @@ work/
     └── old.csv
 ```
 
-### glob の指定
+### Glob Patterns
 
-glob は保持したいパスのパターンとして指定します。複数のパターンは空白で区切ります。
+Specify glob patterns for paths you want to keep. Separate multiple patterns with spaces.
 
 ```sh
 remove-except --dry-run '**/*.md'
 ```
 
-`readme.md` が保持され、`keep.txt`、`todo.txt`、`reports`、`archive` などは削除対象として表示されます。プレビューには保持対象と削除対象の両方が表示されます。`**` は `/` を含む任意のパスに一致するため、`**/*.md` は直下とサブディレクトリ内の `.md` ファイルに一致します。
+`readme.md` is kept, while `keep.txt`, `todo.txt`, `reports`, and `archive` are shown as deletion targets. The preview displays both kept items and deletion targets. `**` matches paths containing `/`, so `**/*.md` matches `.md` files in the current directory and in subdirectories.
 
-よく使う glob 記号は次のとおりです。
+Common glob syntax:
 
-| パターン例 | 意味 |
+| Pattern | Meaning |
 | --- | --- |
-| `*.md` | カレントディレクトリ直下にある `.md` ファイルです。`*` は `/` をまたぎません。 |
-| `**/*.md` | どの階層でも `.md` で終わるパスです。`**` は `/` を含む任意のパスに一致します。 |
-| `reports/report?.csv` | `?` は `/` 以外の任意の 1 文字。例では `report1.csv` と `report2.csv` に一致します。 |
-| `reports/report[12].csv` | `[]` は指定した文字のいずれか 1 文字。例では `report1.csv` と `report2.csv` に一致します。 |
+| `*.md` | `.md` files directly in the current directory. `*` does not cross `/`. |
+| `**/*.md` | Paths ending in `.md` at any depth. `**` matches paths containing `/`. |
+| `reports/report?.csv` | `?` matches any single character except `/`. This example matches `report1.csv` and `report2.csv`. |
+| `reports/report[12].csv` | `[]` matches one of the listed characters. This example matches `report1.csv` and `report2.csv`. |
 
-特定のサブディレクトリ以下に glob を限定する場合は、そのディレクトリからの相対パスをパターンの先頭に付けます。
+To limit a glob to a particular subdirectory, prefix the pattern with a path relative to that directory.
 
 ```sh
 remove-except --dry-run 'reports/**/*.csv'
 ```
 
-この例では `reports/report1.csv`、`reports/report2.csv`、`reports/2025/annual.csv` が保持されます。`**/` は0階層以上のディレクトリに一致するため、`reports/**/*.csv` は `reports` 直下とその下の階層にある `.csv` ファイルを対象にします。glob は引用符で囲んで、シェルによる事前展開を防いでください。
+This example keeps `reports/report1.csv`, `reports/report2.csv`, and `reports/2025/annual.csv`. Because `**/` matches zero or more directory levels, `reports/**/*.csv` applies to `.csv` files directly under `reports` and at deeper levels. Quote globs to prevent the shell from expanding them before the command runs.
 
-### サブディレクトリの指定
+### Selecting Subdirectories
 
-サブディレクトリ全体を残す場合は、ディレクトリ名をそのまま指定します。
+To keep an entire subdirectory, specify its path without a glob.
 
 ```sh
 remove-except --dry-run reports/2025
 ```
 
-`reports/2025` とその中身はすべて保持されます。たとえば `annual.csv` と `notes.txt` は残りますが、`reports/summary.txt` や `reports/report1.csv` は削除対象です。
+`reports/2025` and all of its contents are kept. For example, `annual.csv` and `notes.txt` remain, while `reports/summary.txt` and `reports/report1.csv` are deletion targets.
 
-サブディレクトリ内の 1 ファイルだけを残す場合は、ファイルまでの相対パスを指定します。
+To keep only one file inside a subdirectory, specify its relative path.
 
 ```sh
 remove-except --dry-run reports/2025/annual.csv
 ```
 
-この場合は `annual.csv` と親ディレクトリ `reports`、`reports/2025` が保持されます。同じディレクトリにある `notes.txt` は削除対象です。
+This keeps `annual.csv` and its parent directories, `reports` and `reports/2025`. The sibling file `notes.txt` is a deletion target.
 
-サブディレクトリ以下の特定種類のファイルだけを残す場合は、その場所と glob を組み合わせます。
+To keep only certain file types within a subdirectory, combine its path with a glob.
 
 ```sh
 remove-except --dry-run 'reports/2025/*.csv'
 ```
 
-この例では `reports/2025/annual.csv` が保持され、`reports/2025/notes.txt` は削除対象です。`*` はその階層だけに一致するため、`reports/2025/*.csv` は `reports/2025` 直下の CSV に限定されます。配下の複数階層を対象にする場合は `reports/2025/**/*.csv` を使います。ディレクトリ全体を残す場合は、globではなく `reports/2025` のようにディレクトリ名を指定します。
+This example keeps `reports/2025/annual.csv`; `reports/2025/notes.txt` is a deletion target. Since `*` matches only within one level, `reports/2025/*.csv` is limited to CSV files directly under `reports/2025`. To include deeper levels, use `reports/2025/**/*.csv`. To keep the entire directory, specify its path, such as `reports/2025`, without a glob.
 
-どの例も `--dry-run` で保持対象と削除対象の一覧を確認できます。実際に削除するときだけ `--dry-run` を外してください。通常実行でも両方の一覧を表示してから確認プロンプトを出します。
+Use `--dry-run` in any example to review the kept items and deletion targets. Omit `--dry-run` only when you intend to delete. Normal execution also shows both lists before asking for confirmation.
 
-### ルール
+### Rules
 
-- **処理範囲:** 既定では起動時のカレントディレクトリー以下を再帰的に処理します。`--root` を指定すると、そのディレクトリー以下を処理します。相対ルートは起動時カレントディレクトリー基準で解決します。ルート自体は計画・削除対象に含まれず、filesystem rootは安全のため拒否されます。
-- **保持パターン:** 1 個以上必須です。複数指定した場合はいずれか 1 個に一致すれば保持します。パターンは位置引数として指定し、引数の前後にある空白も名前の一部として扱います。空白を含むパターンはシェルで引用符を付けてください。
-- **パス:** 相対パターンは選択した処理ルート基準です。絶対パターンは正規化後の処理ルート配下のみ受理されます。相対パターンと、ルート接頭辞に一致した後の絶対パターン部分では、`.` 要素と連続する区切りを正規化します。絶対パターンは区切り文字を `/` にそろえてからルート接頭辞を照合しますが、その接頭辞内の `.` 要素や連続区切りは正規化しません。一致しない場合はルート外として拒否します。`..` をパス要素として含むパターン、空のパターン、Windowsの曖昧なdrive-relative path（例: `C:folder`）はエラーになります。
-- **glob:** `*`、`**`、`?`、文字クラス `[]` を利用できます。`*` と `?` は `/` をまたがず、`**` は `/` を含むパスに一致します。たとえば `*.md` は直下の `.md` ファイルに、`**/*.md` は全階層の `.md` ファイルに一致します。シェルによる事前展開を避けるため、glob は引用符で囲んでください。
-- **ディレクトリ:** 一致した項目とその親ディレクトリを保持します。glob を含まないディレクトリパスを指定すると、指定ディレクトリとその配下を保持します。`dir/*` は `dir` 直下の項目にのみ一致し、一致したサブディレクトリの中身までは保持しません。
-- **処理ルート全体を保持:** `.` または `./` は処理ルートを表し、ルート配下の全項目を保持します。
-- **大文字・小文字:** Windows ではツール独自のUnicode単純ケースフォールド（非トルコ語）で照合し、Ubuntuでは区別します。Windowsでは `ä` と `Ä`、`ß` と `ẞ` を同一視しますが、`ß` と `SS` は同一視しません。NTFSのディレクトリ単位のケースセンシティブ設定には追従しません。サポート対象はWindowsとUbuntuです。
-- **シンボリックリンク:** rootに指定したシンボリックリンクはリンク先に解決します。処理ルート配下のリンクはたどらず、リンク自体を1項目として扱います。削除対象の場合もリンクを削除し、リンク先は削除しません。
-- **表示と削除:** 既定の `--layout tree` は保持項目と削除対象をツリー表示し、`--layout flat` は `ItemType` と `RelativePath` の一覧を表示します。凡例は選択中のレイアウトと色状態に合わせます。`--sort-by-type` は `--layout flat` と併用必須で、Directory → File → Symlink、種類内は相対パス順です。指定しない場合は相対パス順です。`--summary keep|delete|both` は指定した側を短い件数表示にし、保持件数（祖先を含む）・直接一致数、削除対象数・最上位削除操作数を区別します。サマリー時はパスが省略されるため、削除前に `--summary` なしの `--dry-run` で全項目を確認してください。通常実行は表示後に確認し、既定の回答は「いいえ」です。`--force` は確認だけを省略します。
-- **標準入出力:** 計画と実行結果は標準出力、警告・エラー・確認プロンプトは標準エラーに表示します。現在は人向けテキスト表示であり、機械可読形式やパイプ入力は提供しません。将来の外部連携では `xargs` 等から位置引数へ渡す方法を想定していますが、安定したパイプ用インターフェースではありません。
-- **一致なし:** どの項目にも一致しない場合は警告を出し、全項目を削除対象とします。ドライランで必ず対象を確認してください。
+- **Processing scope:** By default, the tool recursively processes the current directory from which it was started. Use `--root` to process another directory. A relative root is resolved from the startup directory. The root itself is never included in the plan or deleted. A filesystem root is rejected for safety.
+- **Keep patterns:** At least one pattern is required. With multiple patterns, an item is kept if it matches any one of them. Patterns are positional arguments, and leading or trailing spaces are part of the name. Quote patterns containing spaces in your shell.
+- **Paths:** Relative patterns are resolved from the selected processing root. Absolute patterns are accepted only when they are inside the normalized root. In relative patterns and in the part of an absolute pattern after its matching root prefix, `.` components and repeated separators are normalized. Absolute patterns have their separators converted to `/` before the root prefix is matched, but `.` components and repeated separators within that prefix are not normalized. If the prefix does not match, the pattern is rejected as outside the root. Patterns containing `..` as a path component, empty patterns, and ambiguous Windows drive-relative paths (for example, `C:folder`) are errors.
+- **Globs:** `*`, `**`, `?`, and character classes `[]` are supported. `*` and `?` do not cross `/`; `**` matches paths containing `/`. For example, `*.md` matches `.md` files at the top level, while `**/*.md` matches them at any depth. Quote globs to prevent shell expansion.
+- **Directories:** A matched item and its parent directories are kept. Specifying a directory path without a glob keeps that directory and all of its contents. `dir/*` matches only items directly under `dir`; it does not recursively keep the contents of matched subdirectories.
+- **Keep the entire processing root:** `.` and `./` represent the processing root and keep everything under it.
+- **Case sensitivity:** Windows uses the tool's Unicode simple case folding (non-Turkic); Ubuntu is case-sensitive. On Windows, `ä` and `Ä`, and `ß` and `ẞ`, are treated as equal, but `ß` and `SS` are not. The tool does not follow per-directory NTFS case-sensitivity settings. Windows and Ubuntu are supported.
+- **Symbolic links:** A symbolic link specified as the root is resolved to its target. Links under the processing root are not followed and are treated as individual items. If a link is a deletion target, only the link is removed, not its target.
+- **Display and deletion:** The default `--layout tree` shows kept items and deletion targets as a
+  tree. `--layout flat` shows `ItemType` and `RelativePath` columns. The legend reflects the
+  selected layout and color state. `--sort-by-type` requires `--layout flat` and sorts by Directory,
+  File, then Symlink; items of each type are sorted by relative path. Without this option, items are
+  sorted by relative path. Sorting affects display only and does not change the deletion plan or
+  deletion order. `--summary keep|delete|both` replaces selected paths with concise counts and
+  distinguishes kept items (including ancestors) from direct matches, and deletion items from
+  top-level deletion operations. Because summaries omit paths, review every item with `--dry-run`
+  and without `--summary` before deleting. Normal execution shows the plan before confirmation, and
+  the default answer is No. `--force` skips confirmation only.
+- **Standard input and output:** Plans and execution results go to standard output; warnings, errors, and confirmation prompts go to standard error. Output is currently human-readable text; machine-readable output and pattern input from standard input are not provided. Passing positional arguments from tools such as `xargs` may be useful for future integrations, but no stable pipeline interface is promised.
+- **No matches:** If no item matches any pattern, a warning is shown and everything under the root becomes a deletion target. Always review the targets with a dry run.
 
-## 開発者向け仕様
+## Developer Documentation
 
-### 構成
+### Project Structure
 
-- `src/main.rs`: CLI 引数の解析、処理ルートを使った計画作成、一覧表示、確認、実ファイル削除を担当します。
-- `src/lib.rs`: crate rootの公開再エクスポートと`build_plan`による走査・計画作成の調整を担当します。
-- `src/model.rs`: 公開計画型と読み取りgetterを定義します。`src/pattern.rs` はglob照合、`src/path.rs` はパス検証と正規化を担当します。
-- `tests/cli.rs`: CLIを一時ディレクトリ上で実行し、削除・確認・表示を検証します。`tests/library.rs` は公開ライブラリAPIとOS別ケース照合を検証します。色付き・色なしの描画はバイナリの単体テストで検証します。
+- `src/main.rs`: Parses CLI arguments, creates a plan for the selected root, displays the lists, asks for confirmation, and deletes filesystem items.
+- `src/lib.rs`: Re-exports the public API from the crate root and coordinates scanning and plan creation through `build_plan`.
+- `src/model.rs`: Defines the public plan types and read-only getters. `src/pattern.rs` handles glob matching; `src/path.rs` handles path validation and normalization.
+- `tests/cli.rs`: Runs the CLI in temporary directories and verifies deletion, confirmation, and display. `tests/library.rs` tests the public library API and platform-specific case matching. Binary unit tests cover colored and uncolored rendering.
 
-### 手動テスト
+### Manual Testing
 
-`Prepare-Manual-Test.ps1` は、Rust CLI の手動確認用に `manual-test-workspace` と fixture ファイルを作成します。`keep-link` は `keep.txt` を指すシンボリックリンクで、プレビューの `@` 凡例を確認するためのfixtureです。Windowsではシンボリックリンク作成に Developer Mode の有効化または管理者権限が必要な場合があります。リポジトリのルートで実行します。
+`Prepare-Manual-Test.ps1` creates `manual-test-workspace` and fixture files for manually checking the Rust CLI. `keep-link` is a symbolic link to `keep.txt` used to verify the `@` marker in previews. On Windows, creating symbolic links may require Developer Mode or administrator privileges. Run the script from the repository root.
 
 ```powershell
 .\Prepare-Manual-Test.ps1
@@ -200,15 +211,15 @@ Set-Location .\manual-test-workspace
 cargo run --manifest-path ..\Cargo.toml -- --dry-run keep.txt keep '*.md'
 ```
 
-一覧では保持対象として `keep.txt`、`release-notes.md`、`keep` ディレクトリとその配下が表示され、それ以外は削除候補として表示されます。実際の削除を試す場合は `--dry-run` を外して実行し、プロンプトには `n` と回答すれば削除を中止できます。削除を実行した後は `Set-Location ..` でルートに戻り、スクリプトを再実行して既知の fixture を復元します。
+The preview lists `keep.txt`, `release-notes.md`, the `keep` directory, and its contents as kept; all other items are deletion targets. To try an actual deletion, omit `--dry-run` and answer `n` at the prompt to cancel. If you perform a deletion, return to the repository root with `Set-Location ..` and rerun the script to restore the known fixtures.
 
-このスクリプトは既知の fixture ファイルを上書き・作成し、`keep-link` が `keep.txt` を指す既知のシンボリックリンクである場合だけ張り直します。フォルダ内のその他のファイルや別リンクは削除しません。別の場所に作成する場合は `-Path` で出力先を指定できます。`keep-link` に競合する通常ファイルや別リンクが存在する場合は、上書きせずエラーになります。
+The script creates or overwrites only known fixture files. It replaces `keep-link` only when that known symbolic link points to `keep.txt`. It does not delete other files or links in the directory. Use `-Path` to create fixtures elsewhere. If a regular file or a different link conflicts with `keep-link`, the script reports an error instead of overwriting it.
 
-### 計画 API
+### Plan API
 
-ライブラリの `build_plan(root, patterns)` は、指定ルートと保持パターンから `RemovalPlan` を作成します。保持パターン未指定または空のパターン、無効なglob、ルート外の絶対パターン、親ディレクトリ移動、filesystem rootまたはディレクトリ以外をルートに指定した場合、Windowsのdrive-relative pathを指定した場合はエラーを返します。ルートの解決や走査に失敗した場合も計画作成はエラーになります。処理ルートを表す `.` と `./` は同じくルート配下全体を保持します。
+The library function `build_plan(root, patterns)` creates a `RemovalPlan` from the selected root and keep patterns. It returns an error if no patterns are provided, a pattern is empty or contains an invalid glob, an absolute pattern is outside the root, a pattern traverses to a parent directory, the root is a filesystem root or is not a directory, or a Windows drive-relative path is used. Resolving or scanning the root can also fail. `.` and `./` both represent the processing root and keep everything beneath it.
 
-`RemovalPlan` と `PlannedItem` のデータは getter 経由で読み取ります。getter は参照を返すため、計画内容を変更できません。公開フィールドを直接参照していたコードは getter 呼び出しへ移行してください。
+Read `RemovalPlan` and `PlannedItem` data through their getters. Getters return references and do not allow the plan to be modified. Code that accessed public fields directly should be updated to call the getters.
 
 ```rust,no_run
 use remove_except::build_plan;
@@ -222,21 +233,21 @@ for item in plan.delete_roots() {
 }
 ```
 
-`RemovalPlan` の getter:
+`RemovalPlan` getters:
 
-- `root()`: 正規化された処理ルート。
-- `direct_match_count()`: パターンに直接一致した項目数。一致なしの警告判定に使います。
-- `keep_items()`: 保持対象となる項目すべて。祖先ディレクトリを含み、相対パス順に並びます。
-- `delete_items()`: 削除対象となる項目すべて。相対パス順に並びます。
-- `delete_roots()`: 実削除に使う最上位項目。削除対象ディレクトリの子孫は含めず、再帰削除の重複を避けます。
+- `root()`: The normalized processing root.
+- `direct_match_count()`: The number of items directly matched by patterns; used to determine whether to warn that nothing matched.
+- `keep_items()`: All kept items, including required ancestor directories, sorted by relative path.
+- `delete_items()`: All deletion targets, sorted by relative path.
+- `delete_roots()`: The top-level items passed to deletion. Descendants of deletion-target directories are excluded to avoid redundant recursive deletions.
 
-各 `PlannedItem` は `path()`、`relative_path()`、`item_type()` で読み取れます。相対パスは `/` 区切りです。`path()` は正規化されたルート配下の絶対パスを返します。Windowsでは標準ライブラリのcanonicalize表現により `\\?\` の拡張パスprefixが含まれる場合があります。
+Each `PlannedItem` can be read through `path()`, `relative_path()`, and `item_type()`. Relative paths use `/` separators. `path()` returns an absolute path under the normalized root. On Windows, the standard library's canonicalized path may include the extended-path prefix `\\?\`.
 
-走査時はシンボリックリンクをたどりません。計画作成後は CLI 側が `delete_roots` を削除します。削除中にファイルシステムエラーが起きた場合はエラー終了しますが、それ以前に削除済みの項目は元に戻りません。
+The scan does not follow symbolic links. After creating the plan, the CLI deletes the items in `delete_roots`. If a filesystem error occurs during deletion, the command exits with an error, but items already deleted before the error cannot be restored.
 
-### ビルドと検証
+### Building and Validation
 
-Edition 2024 を使用します。開発環境では Rust 1.85 以降を使用してください。
+This project uses Edition 2024. Use Rust 1.85 or later for development.
 
 ```sh
 cargo fmt --check
@@ -246,30 +257,30 @@ cargo build --release
 cargo doc --no-deps
 ```
 
-WindowsからUbuntuで同じRust検証を行う場合は、リポジトリルートで次のスクリプトを実行します。
+To run the same Rust checks on Ubuntu from Windows, run this script from the repository root.
 
 ```powershell
 .\local-test-tools\Test-Rust-WSL.ps1
 ```
 
-### パフォーマンス計測
+### Performance Benchmarks
 
-計画生成のベンチマークは、標準ライブラリと既存の開発依存関係だけを使い、一時fixtureを作成してから `build_plan` を計測します。fixture作成時間は計測に含めません。2,080項目の広い構成で単一glob・複数glob・リテラルディレクトリー・全項目保持を、8,208項目の構成で疎一致・全項目保持を、さらに深い構成での一致を比較します。
+Plan-generation benchmarks use only the standard library and existing development dependencies. They create temporary fixtures before measuring `build_plan`; fixture creation time is excluded. The benchmarks compare a broad 2,080-item tree with one glob, multiple globs, a literal directory, and all items kept; an 8,208-item tree with sparse matches and all items kept; and matches in a deeper tree.
 
 ```sh
 cargo bench --bench plan_generation
 cargo bench --bench plan_generation -- --samples 25 --iterations 10
 ```
 
-各ケースの中央値、サンプル範囲、走査項目数、パターン数、概算項目/秒を表示します。既定値の9サンプル×3反復は短時間の確認用です。性能比較では同じOS・同じマシン・同じ引数で25サンプル×10反復を実行し、ビルド完了後のRelease相当ベンチマーク結果を記録してください。
+Each case reports the median, sample range, number of scanned items, number of patterns, and approximate items per second. The default of 9 samples × 3 iterations is for quick checks. For performance comparisons, use 25 samples × 10 iterations with the same OS, machine, and arguments, and record the Release-mode results after the build completes.
 
-CLI全体を計測する場合は、`hyperfine` でReleaseバイナリをdry-runします。次の例は手動fixtureを読むだけで、削除しません。
+To benchmark the full CLI, run a dry run of the release binary with `hyperfine`. The following example only reads the manual fixtures and does not delete anything.
 
 ```powershell
 cargo build --release
 hyperfine --warmup 3 --runs 10 'target/release/remove-except.exe --dry-run --summary both --root manual-test-workspace keep.txt keep'
 ```
 
-CLI計測にはプロセス起動、計画生成、表示が含まれます。計画生成のみの計測と混同せず、fixtureの内容を比較間で同じにしてください。
+CLI measurements include process startup, plan generation, and output rendering. Do not compare them as if they measured plan generation alone, and keep fixture contents identical between runs.
 
-依存ライブラリは `Cargo.toml` で管理します。CLI は `clap`、確認プロンプトは `dialoguer`、出力装飾は `console`、glob 照合は `globset`、ディレクトリ走査は `walkdir`、エラー文脈の付与は `anyhow` を利用します。Windows向けUnicode glob照合では `regex-automata` と `unicode-casefold` を利用しています。
+Dependencies are managed in `Cargo.toml`. The CLI uses `clap`, confirmation prompts use `dialoguer`, output styling uses `console`, glob matching uses `globset`, directory traversal uses `walkdir`, and error context uses `anyhow`. Windows Unicode glob matching uses `regex-automata` and `unicode-casefold`.

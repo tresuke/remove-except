@@ -1,91 +1,92 @@
 use std::path::{Path, PathBuf};
 
-/// 走査対象内で見つかった項目の種類です。
+/// The type of an item found during traversal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemType {
-    /// 通常のファイルです。
+    /// A regular file.
     File,
-    /// ディレクトリです。
+    /// A directory.
     Directory,
-    /// シンボリックリンク自体です。リンク先は走査しません。
+    /// A symbolic link itself. Its target is not traversed.
     Symlink,
 }
 
-/// 保持または削除の計画に含まれる、走査時点のファイルシステム項目です。
+/// A filesystem item in the keep or deletion plan, captured at scan time.
 ///
-/// 計画作成後にファイルシステムが変更された場合、この値は自動更新されません。
+/// This value is not automatically updated if the filesystem changes after planning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedItem {
-    /// 正規化されたルートを基準に解決した項目の絶対パスです。
-    /// Windowsではcanonicalize表現により `\\?\` の拡張パスprefixが含まれる場合があります。
+    /// Absolute path to the item, resolved under the normalized root.
+    /// On Windows, the canonicalized path may include the extended-path prefix `\\?\`.
     pub(crate) path: PathBuf,
-    /// ルートからの相対パスです。区切り文字には `/` を使います。
+    /// Path relative to the root, using `/` separators.
     pub(crate) relative_path: String,
-    /// 項目の種類です。
+    /// The type of this item.
     pub(crate) item_type: ItemType,
 }
 
 impl PlannedItem {
-    /// 正規化されたルートを基準に解決した項目の絶対パスを返します。
+    /// Returns the absolute path to the item, resolved under the normalized root.
     ///
-    /// Windowsではcanonicalize表現により `\\?\` の拡張パスprefixが含まれる場合があります。
+    /// On Windows, the canonicalized path may include the extended-path prefix `\\?\`.
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// ルートからの相対パスを `/` 区切りで返します。
+    /// Returns the path relative to the root, using `/` separators.
     pub fn relative_path(&self) -> &str {
         &self.relative_path
     }
 
-    /// 項目の種類を返します。
+    /// Returns the type of this item.
     pub fn item_type(&self) -> ItemType {
         self.item_type
     }
 }
 
-/// ルート配下の走査時点の情報と保持・削除対象をまとめた計画です。
+/// A plan containing scan-time information and items to keep or delete beneath a root.
 ///
-/// この値の作成やgetterによる参照はファイルシステムを変更しません。
-/// 計画作成後にファイルシステムが変更されても、内容は自動更新・再検証されません。
+/// Creating this value or reading it through getters does not modify the filesystem.
+/// Its contents are not automatically updated or revalidated if the filesystem changes
+/// after the plan is created.
 #[derive(Debug)]
 pub struct RemovalPlan {
-    /// 正規化された走査ルートです。このパス自体は計画に含まれません。
+    /// The normalized traversal root. The root itself is not included in the plan.
     pub(crate) root: PathBuf,
-    /// 保持パターンに直接一致した項目数です。祖先のみの項目は含みません。
+    /// Number of items directly matched by keep patterns; ancestors alone are not counted.
     pub(crate) direct_match_count: usize,
-    /// 保持される項目とその祖先です。相対パス順に並びます。
+    /// Items to keep and their ancestors, sorted by relative path.
     pub(crate) keep_items: Vec<PlannedItem>,
-    /// 削除対象となる全項目です。相対パス順に並びます。
+    /// All deletion targets, sorted by relative path.
     pub(crate) delete_items: Vec<PlannedItem>,
-    /// 実削除に使う最上位の項目です。削除対象ディレクトリ内の子孫は含みません。
+    /// Top-level items used for deletion. Descendants of deletion-target directories are excluded.
     pub(crate) delete_roots: Vec<PlannedItem>,
 }
 
 impl RemovalPlan {
-    /// 正規化された走査ルートを返します。
+    /// Returns the normalized traversal root.
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    /// 保持パターンに直接一致した項目数を返します。祖先項目は数えません。
+    /// Returns the number of items directly matched by keep patterns; ancestors are not counted.
     pub fn direct_match_count(&self) -> usize {
         self.direct_match_count
     }
 
-    /// 保持項目とその祖先を相対パス順で返します。
+    /// Returns kept items and their ancestors, sorted by relative path.
     pub fn keep_items(&self) -> &[PlannedItem] {
         &self.keep_items
     }
 
-    /// 削除対象の全項目を相対パス順で返します。
+    /// Returns all deletion targets, sorted by relative path.
     pub fn delete_items(&self) -> &[PlannedItem] {
         &self.delete_items
     }
 
-    /// 実削除に使う最上位の項目を返します。
+    /// Returns the top-level items used for deletion.
     ///
-    /// 含まれる項目は削除計画上の候補であり、このgetterは削除を実行しません。
+    /// These items are candidates in the removal plan; this getter does not perform deletion.
     pub fn delete_roots(&self) -> &[PlannedItem] {
         &self.delete_roots
     }

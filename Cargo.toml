@@ -2,6 +2,8 @@
 name = "remove-except"
 version = "0.2.3"
 edition = "2024"
+description = "A Rust CLI to keep selected paths or glob matches and remove everything else under a root."
+repository = "https://github.com/tresuke/remove-except"
 
 [dependencies]
 anyhow = "1"

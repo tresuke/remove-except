@@ -79,7 +79,7 @@ fn hex_digit(byte: u8) -> Option<u8> {
     }
 }
 
-/// 保持パターンをGlobSetに変換し、リテラルのディレクトリ指定を記録します。
+/// Compiles keep patterns into a matcher and records literal directory prefixes.
 pub(super) fn compile_patterns(root: &Path, patterns: &[String]) -> Result<CompiledPatterns> {
     let root_text = normalize_absolute_for_match(&root.to_string_lossy());
     #[cfg(not(windows))]
@@ -144,7 +144,7 @@ impl CompiledPatterns {
     }
 }
 
-/// 絶対パターンをルート相対へ変換し、ルート外の指定を拒否します。
+/// Converts an absolute pattern to a root-relative pattern and rejects paths outside the root.
 pub(super) fn normalize_pattern(root_text: &str, pattern: &str) -> Result<String> {
     if is_drive_relative_path(pattern) {
         bail!("Drive-relative patterns are not supported: {pattern}");

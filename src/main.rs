@@ -1,4 +1,4 @@
-//! カレントディレクトリ配下の保持・削除計画を表示し、確認後に削除します。
+//! Displays a keep/deletion plan beneath the current directory and deletes items after confirmation.
 
 use std::cmp::Ordering;
 use std::fs;
@@ -661,7 +661,7 @@ mod tests {
     use super::display_root_path;
 
     #[test]
-    // ツリー表示用の接尾辞がディレクトリとシンボリックリンクを識別することを確認する。
+    // Verify tree markers distinguish directories from symbolic links.
     fn tree_item_suffix_identifies_directories_and_symlinks() {
         assert_eq!(tree_item_suffix(ItemType::Directory), "/");
         assert_eq!(tree_item_suffix(ItemType::File), "");
@@ -700,14 +700,14 @@ mod tests {
     }
 
     #[test]
-    // フラット表示の種類順がディレクトリ、ファイル、シンボリックリンクであることを確認する。
+    // Verify flat layout sorts directories, files, and symbolic links by type.
     fn flat_item_type_rank_orders_directories_files_and_symlinks() {
         assert!(flat_item_type_rank(ItemType::Directory) < flat_item_type_rank(ItemType::File));
         assert!(flat_item_type_rank(ItemType::File) < flat_item_type_rank(ItemType::Symlink));
     }
 
     #[test]
-    // フラット表示でディレクトリとリンクに色を付け、ファイルは無色にすることを確認する。
+    // Verify flat layout colors directories and links but leaves files uncolored.
     fn flat_item_styles_directories_and_symlinks_but_not_files() {
         let _color_test_guard = COLOR_TEST_LOCK.lock().unwrap();
         let colors_were_enabled = console::colors_enabled();
@@ -724,7 +724,7 @@ mod tests {
     }
 
     #[test]
-    // ツリー表示で実ディレクトリ、シンボリックリンク、保持済み親を色分けすることを確認する。
+    // Verify tree layout colors real directories, symbolic links, and kept parents distinctly.
     fn tree_item_styles_directories_symlinks_and_kept_parents() {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("real-dir/file.txt").write_str("file").unwrap();

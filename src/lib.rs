@@ -1,11 +1,11 @@
-//! パターンに一致した項目を保持し、それ以外を削除する計画を作成します。
+//! Creates a plan that keeps matching items and removes all others.
 //!
-//! [`build_plan`] はルートディレクトリ自体を残したまま、その配下を走査します。
-//! 保持パターンは複数指定でき、いずれかに一致した項目とその祖先を保持します。
-//! 計画作成はファイルシステムを変更しません。返される計画は走査時点の情報であり、
-//! その後のファイルシステム変更を反映したり、削除を実行したりはしません。
-//! ケース照合はWindowsではUnicode単純ケースフォールド（非トルコ語）、Ubuntuでは
-//! 大文字小文字を区別します。Windowsのディレクトリ単位のケースセンシティブ設定には追従しません。
+//! [`build_plan`] scans beneath the root without including the root itself.
+//! Multiple keep patterns may be provided; matching items and their ancestors are kept.
+//! Plan creation does not change the filesystem. The returned plan is a snapshot from the
+//! time of the scan; it does not reflect later filesystem changes or perform deletion.
+//! Case matching uses Unicode simple case folding (non-Turkic) on Windows and is
+//! case-sensitive on Ubuntu. Per-directory NTFS case-sensitivity settings are ignored.
 
 use std::path::{Path, PathBuf};
 
@@ -20,25 +20,26 @@ pub use model::{ItemType, PlannedItem, RemovalPlan};
 use path::{display_path, is_drive_relative_path, is_filesystem_root};
 use pattern::compile_patterns;
 
-/// ルート配下を走査し、保持・削除対象の計画を作成します。
+/// Scans beneath the root and creates a plan of items to keep and delete.
 ///
-/// パターンは保持対象を指定します。複数のパターンを指定した場合はいずれかに
-/// 一致した項目を保持し、その祖先も保持します。`*` と `?` はパス区切りをまたがず、
-/// `**` は複数階層に一致します。リテラルのディレクトリ指定は配下も再帰的に保持します。
-/// パターンの前後の空白はそのまま照合します。相対パターンはルート基準で、`.` 要素と
-/// 連続する区切り文字は正規化されます。`..` を含むパターンは拒否します。
-/// 相対ルートはプロセスのカレントディレクトリ基準で解決されます。
+/// Patterns specify items to keep. With multiple patterns, an item is kept if it matches
+/// any pattern, along with its ancestors. `*` and `?` do not cross path separators, while
+/// `**` matches across multiple levels. A literal directory path keeps its contents recursively.
+/// Leading and trailing whitespace in patterns is preserved. Relative patterns are resolved
+/// from the root; `.` components and repeated separators are normalized. Patterns containing
+/// `..` are rejected. Relative roots are resolved from the process current directory.
 ///
-/// シンボリックリンクはたどらず、リンク自体を1項目として扱います。ルートディレクトリ
-/// 自体は保持・削除一覧に含まれません。計画作成はファイルを変更せず、結果は走査時点の
-/// スナップショットです。計画後にファイルシステムが変更されても自動で再検証されません。
+/// Symbolic links are not followed and are treated as individual items. The root directory
+/// itself is not included in the keep or delete lists. Plan creation does not modify files;
+/// the result is a snapshot from the time of the scan. Filesystem changes after planning are
+/// not automatically revalidated.
 ///
 /// # Errors
 ///
-/// パターンが未指定または空、無効なglob、親ディレクトリへの移動を含む、またはルート外の
-/// 絶対パスを指す場合にエラーを返します。filesystem rootやディレクトリ以外をルートに
-/// 指定した場合、ルートの解決や走査に失敗した場合もエラーになります。詳細なエラー文言は
-/// 安定したAPI契約ではありません。
+/// Returns an error if no pattern is provided, a pattern is empty or has an invalid glob,
+/// a pattern traverses to a parent directory, or an absolute pattern is outside the root.
+/// An error is also returned if the root is a filesystem root or is not a directory, or if
+/// resolving or scanning the root fails. Exact error messages are not a stable API contract.
 ///
 /// # Examples
 ///
@@ -77,7 +78,7 @@ pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
 
     let compiled_patterns = compile_patterns(&root, patterns)?;
     let mut entries = Vec::new();
-    // WalkDirは深さ優先で項目を返すため、現在項目の祖先ディレクトリのindexを保持する。
+    // WalkDir yields entries depth-first, so retain indices of the current item's ancestors.
     let mut directory_stack = Vec::new();
     let mut direct_match_count = 0;
 
@@ -85,7 +86,7 @@ pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
         let entry = entry.with_context(|| "Failed to walk root directory")?;
         let depth = entry.depth();
         directory_stack.truncate(depth.saturating_sub(1));
-        // 親は子より先に訪れるため、そのindexは常に現在項目より小さい。
+        // Parents are visited before children, so a parent's index is always smaller.
         let parent_index = directory_stack.last().copied();
         let file_type = entry.file_type();
         let path = entry.path().to_path_buf();
@@ -125,13 +126,13 @@ pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
     Ok(finalize_plan(root, direct_match_count, entries))
 }
 
-/// 走査時に記録した親indexから保持祖先と最上位の削除項目を確定します。
+/// Derives kept ancestors and top-level deletion items from recorded parent indices.
 fn finalize_plan(
     root: PathBuf,
     direct_match_count: usize,
     mut entries: Vec<IndexedItem>,
 ) -> RemovalPlan {
-    // 子は親より後ろにあるため、逆順にたどって一致項目から祖先へ保持状態を伝播する。
+    // Children follow parents, so walk in reverse to propagate keep state to ancestors.
     for index in (0..entries.len()).rev() {
         if entries[index].keep
             && let Some(parent_index) = entries[index].parent_index
@@ -140,7 +141,7 @@ fn finalize_plan(
         }
     }
 
-    // 保持されない項目の親が保持対象か処理ルートなら、その項目を削除ルートとする。
+    // An unkept item is a deletion root when its parent is kept or is the processing root.
     for index in 0..entries.len() {
         let parent_is_kept = entries[index]
             .parent_index
@@ -172,15 +173,15 @@ fn finalize_plan(
     }
 }
 
-/// 走査順序を使って保持祖先と最上位の削除項目を導出するための情報です。
+/// Data used to derive kept ancestors and top-level deletion items from traversal order.
 struct IndexedItem {
-    /// 公開計画に含める項目です。
+    /// The item included in the public plan.
     item: PlannedItem,
-    /// 処理ルート直下でない場合、走査順序ベクター内にある親ディレクトリーのindexです。
+    /// Index of the parent directory in traversal order, unless directly under the root.
     parent_index: Option<usize>,
-    /// 直接一致で初期化し、一致項目の祖先へ保持状態を伝播します。
+    /// Initialized from direct matches and propagated to their ancestors.
     keep: bool,
-    /// 実際の削除処理に渡す最上位項目の場合にtrueです。
+    /// True when this is a top-level item passed to the deletion routine.
     is_delete_root: bool,
 }
 
@@ -195,7 +196,7 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    // UnixとWindowsのファイルシステムルートを正しく判定することを確認する。
+    // Verify filesystem roots are identified correctly on Unix and Windows.
     fn identifies_filesystem_root_paths() {
         assert!(is_filesystem_root(Path::new("/")));
 
@@ -209,7 +210,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    // Windowsのドライブ相対パスをルートと保持パターンの両方で拒否することを確認する。
+    // Verify Windows drive-relative paths are rejected as both roots and keep patterns.
     fn rejects_drive_relative_roots_and_patterns() {
         assert!(is_drive_relative_path("C:folder"));
         assert!(!is_drive_relative_path("C:\\folder"));
@@ -223,14 +224,14 @@ mod tests {
     }
 
     #[test]
-    // ファイルシステムルートを走査開始前に拒否することを確認する。
+    // Verify a filesystem root is rejected before scanning begins.
     fn rejects_filesystem_root_before_walking_it() {
         let error = build_plan(Path::new("/"), &["*".to_owned()]).unwrap_err();
         assert!(error.to_string().contains("Filesystem roots"));
     }
 
     #[test]
-    // パターン未指定、空パターン、不正なglobを拒否することを確認する。
+    // Verify missing patterns, empty patterns, and invalid globs are rejected.
     fn rejects_empty_and_invalid_patterns() {
         let temp = assert_fs::TempDir::new().unwrap();
 
@@ -249,7 +250,7 @@ mod tests {
     }
 
     #[test]
-    // ディレクトリ以外を処理ルートとして指定すると拒否することを確認する。
+    // Verify a non-directory path is rejected as the processing root.
     fn rejects_non_directory_root() {
         let temp = assert_fs::TempDir::new().unwrap();
         let root_file = temp.child("root.txt");
@@ -261,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    // パターン一致項目と祖先を保持し、それ以外を削除計画に含めることを確認する。
+    // Verify matched items and ancestors are kept and all other items are planned for deletion.
     fn keeps_matching_item_and_its_ancestors() {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("keep/nested/file.txt")
@@ -285,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    // リテラルのディレクトリ指定が配下全体を保持することを確認する。
+    // Verify a literal directory pattern keeps the entire subtree.
     fn directory_prefix_keeps_its_contents() {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("keep/deep/file.txt").write_str("keep").unwrap();
@@ -306,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    // * は直下、** は複数階層のパスに一致することを確認する。
+    // Verify `*` matches one level and `**` matches paths at multiple levels.
     fn globstar_matches_nested_paths_while_star_matches_one_level() {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("root.md").write_str("keep").unwrap();
@@ -330,7 +331,7 @@ mod tests {
     }
 
     #[test]
-    // ? と文字クラスがそれぞれ1文字に一致することを確認する。
+    // Verify `?` and character classes each match one character.
     fn question_mark_and_character_class_match_one_character() {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("file1.c").write_str("keep").unwrap();
@@ -355,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    // dir/* が直下の項目だけに一致し、子孫までは保持しないことを確認する。
+    // Verify `dir/*` matches direct children but does not keep nested descendants.
     fn single_level_glob_does_not_keep_nested_directory_contents() {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("dir/top.txt").write_str("keep").unwrap();
@@ -371,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    // 親ディレクトリへの移動を含む保持パターンを拒否することを確認する。
+    // Verify keep patterns that traverse to a parent directory are rejected.
     fn rejects_parent_traversal() {
         let temp = assert_fs::TempDir::new().unwrap();
         let error = build_plan(temp.path(), &["../outside".to_owned()]).unwrap_err();
@@ -379,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    // ルート外を指す絶対保持パターンを拒否することを確認する。
+    // Verify absolute keep patterns outside the root are rejected.
     fn absolute_pattern_must_stay_within_root_boundary() {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("keep.txt").write_str("keep").unwrap();
@@ -395,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    // ルート内の絶対保持パターンで対象項目を保持できることを確認する。
+    // Verify an absolute keep pattern inside the root keeps the matching item.
     fn absolute_keep_pattern_matches_inside_root() {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("keep.txt").write_str("keep").unwrap();
@@ -409,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    // Globの大文字・小文字の照合がプラットフォームごとの仕様に従うことを確認する。
+    // Verify glob case matching follows the platform-specific policy.
     fn glob_case_sensitivity_matches_platform() {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("Keep.txt").write_str("keep").unwrap();
@@ -421,7 +422,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    // Windowsのルート相対パターンが選択ルート外なら拒否することを確認する。
+    // Verify Windows root-relative patterns outside the selected root are rejected.
     fn rejects_windows_root_relative_pattern_outside_current_root() {
         let temp = assert_fs::TempDir::new().unwrap();
 
