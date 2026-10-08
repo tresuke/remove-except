@@ -204,7 +204,27 @@ cargo run --manifest-path ..\Cargo.toml -- --dry-run keep.txt keep '*.md'
 
 一覧では保持対象として `keep.txt`、`release-notes.md`、`keep` ディレクトリとその配下が表示され、それ以外は削除候補として表示されます。実際の削除を試す場合は `--dry-run` を外して実行し、プロンプトには `n` と回答すれば削除を中止できます。削除を実行した後は `Set-Location ..` でルートに戻り、スクリプトを再実行して既知の fixture を復元します。
 
-このスクリプトは既知の fixture ファイルを上書き・作成し、`keep-link` が `keep.txt` を指す既知のシンボリックリンクである場合だけ張り直します。フォルダ内のその他のファイルや別リンクは削除しません。別の場所に作成する場合は `-Path` で出力先を指定できます。`keep-link` に競合する通常ファイルや別リンクが存在する場合は、上書きせずエラーになります。
+Ubuntu（WSLを含む）では `prepare-manual-test.sh` で同じfixtureを作成できます。WSLでは `/mnt/...` ではなくLinuxホーム配下のリポジトリコピーで作業してください。そのコピーのリポジトリルートから次を実行します。Cargoが `PATH` に含まれていることも確認してください。
+
+```bash
+bash ./prepare-manual-test.sh
+cd manual-test-workspace
+cargo run --manifest-path ../Cargo.toml -- --dry-run keep.txt keep '*.md'
+```
+
+確認プロンプトで中止する場合は `--dry-run` を外して実行し、`n` と回答します。実際に削除した後は `cd ..` でリポジトリルートへ戻り、準備スクリプトを再実行してください。
+
+両スクリプトは既知のfixtureファイルを上書き・作成し、`keep-link` が `keep.txt` を指す既知のシンボリックリンクである場合だけ張り直します。フォルダ内のその他のファイルや別リンクは削除しません。別の場所に作成する場合は、PowerShellでは `-Path`、Bashでは省略可能な出力先の位置引数を指定します。`keep-link` に競合する通常ファイルや別リンクが存在する場合は、上書きせずエラーになります。
+
+```powershell
+.\Prepare-Manual-Test.ps1 -Path 'C:\work\manual-fixtures'
+```
+
+```bash
+bash ./prepare-manual-test.sh "$HOME/manual-fixtures"
+```
+
+任意の出力先に作成したfixtureディレクトリからCargoを実行する場合は、`--manifest-path` にリポジトリの `Cargo.toml` の絶対パスを指定してください。
 
 ### 計画 API
 

@@ -213,7 +213,27 @@ cargo run --manifest-path ..\Cargo.toml -- --dry-run keep.txt keep '*.md'
 
 The preview lists `keep.txt`, `release-notes.md`, the `keep` directory, and its contents as kept; all other items are deletion targets. To try an actual deletion, omit `--dry-run` and answer `n` at the prompt to cancel. If you perform a deletion, return to the repository root with `Set-Location ..` and rerun the script to restore the known fixtures.
 
-The script creates or overwrites only known fixture files. It replaces `keep-link` only when that known symbolic link points to `keep.txt`. It does not delete other files or links in the directory. Use `-Path` to create fixtures elsewhere. If a regular file or a different link conflicts with `keep-link`, the script reports an error instead of overwriting it.
+On Ubuntu (including WSL), use `prepare-manual-test.sh` to create the same fixtures. In WSL, work in a repository copy under the Linux home directory rather than under `/mnt/...`. Run these commands from that copy's repository root; ensure that Cargo is available on `PATH`.
+
+```bash
+bash ./prepare-manual-test.sh
+cd manual-test-workspace
+cargo run --manifest-path ../Cargo.toml -- --dry-run keep.txt keep '*.md'
+```
+
+To cancel at the confirmation prompt, omit `--dry-run` and answer `n`. After an actual deletion, return to the repository root with `cd ..` and rerun the generator.
+
+Both scripts create or overwrite only known fixture files. They replace `keep-link` only when that known symbolic link points to `keep.txt`. They do not delete other files or links in the directory. Use `-Path` in PowerShell or the optional workspace-path argument in Bash to create fixtures elsewhere. If a regular file or a different link conflicts with `keep-link`, the script reports an error instead of overwriting it.
+
+```powershell
+.\Prepare-Manual-Test.ps1 -Path 'C:\work\manual-fixtures'
+```
+
+```bash
+bash ./prepare-manual-test.sh "$HOME/manual-fixtures"
+```
+
+For a custom workspace location, use the absolute path to the repository's `Cargo.toml` with `--manifest-path` when running Cargo from the fixture directory.
 
 ### Plan API
 
