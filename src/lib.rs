@@ -401,7 +401,8 @@ mod tests {
         let temp = assert_fs::TempDir::new().unwrap();
         temp.child("keep.txt").write_str("keep").unwrap();
         temp.child("remove.txt").write_str("remove").unwrap();
-        let keep = temp.path().join("keep.txt").to_string_lossy().into_owned();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let keep = root.join("keep.txt").to_string_lossy().into_owned();
 
         let plan = build_plan(temp.path(), &[keep]).unwrap();
 
