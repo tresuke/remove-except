@@ -15,6 +15,15 @@
 - Keep the dependencies already adopted in `Cargo.toml` (runtime: `clap`, `globset`, `walkdir`, `dialoguer`, `anyhow`, `console`; Windows-only: `regex-automata`, `unicode-casefold`; tests: `assert_cmd`, `assert_fs`). Do not add dependencies for functionality available from existing crates. If a custom domain error type is needed, consider adding `thiserror` or replacing `anyhow`.
 - Write commit messages in English. Put a summary on the first line, leave the second line blank, and use `-`-prefixed bullets for details starting on the third line.
 
+## Versioning and Releases
+
+- During the `0.x` series, use patch increments for fixes that restore documented behavior. Use minor increments for backward-compatible feature additions, breaking CLI or public library API changes, and MSRV increases. For a release containing multiple changes, use the highest applicable increment.
+- Documentation-only, test-only, and CI-only changes do not normally require a version bump. Classify dependency updates by their effect on the distributed CLI or library: fixes without compatibility changes use a patch increment; new features, breaking changes, or MSRV increases use a minor increment.
+- Assess changes to keep/delete decisions and confirmation behavior explicitly. Restoring documented behavior may be a patch fix, but changing the specification requires a minor increment. Describe any effect on deletion results or safety in both READMEs when relevant and in the release notes; a patch version does not guarantee identical deletion results.
+- Bump the version once the changes included in a release are settled, not automatically for every PR. Update `Cargo.toml` and the root package entry in `Cargo.lock` together without unnecessarily updating dependencies.
+- Submit version bumps through a branch and PR, verify all required CI checks before merging, and verify the resulting `main` CI before publishing a release. A version bump alone does not authorize creating a tag or GitHub Release, or publishing to crates.io; obtain explicit approval for those actions.
+- Do not move a published release tag or replace published contents with different contents under the same version. Publish corrections under a new version.
+
 ## Safety and Behavior
 
 - This program deletes files. Keep validation and removal-plan creation separate from actual deletion, and show a preview before confirmation. `--dry-run` must not modify the filesystem. Normal execution displays both lists, then asks whether to proceed: `y`/`yes` confirms, while `n` or Enter cancels; the default is No. `--force` skips only this prompt and must not bypass validation. Document these confirmation inputs in both READMEs.

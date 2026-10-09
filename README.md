@@ -200,6 +200,12 @@ A legend appears after the processing-directory path only when a full path listi
 
 Kept items, deletion targets, and execution results are written to standard output. Warnings, errors, and confirmation prompts are written to standard error. Keep patterns are positional arguments. Reading patterns from standard input and stable machine-readable output are not supported. Parsing standard output from another program is not a supported use case.
 
+## Versioning and Compatibility
+
+During the 0.x series, bug fixes use patch releases. Feature additions, breaking CLI or public library API changes, and increases to the minimum supported Rust version (MSRV) use minor releases. Minor updates may therefore include breaking changes.
+
+Changes affecting which items are kept or deleted, or how deletion is confirmed, are documented in release notes. Even a patch update may change deletion results by fixing a bug. Review the changes when updating and inspect the targets with `--dry-run` before deleting.
+
 ## License
 
 This project is dual-licensed. You may choose either `LICENSE-MIT` or `LICENSE-APACHE`. Dependencies are covered by their respective licenses.
