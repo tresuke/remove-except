@@ -8,11 +8,11 @@ Have you ever wanted to keep only a few items among many files in a directory an
 
 ## Safety Notice
 
-This tool permanently deletes files and directories. Before deleting anything, use `--dry-run` and review every item. `--summary` omits paths, so do not use it for the pre-deletion review. If none of the supplied keep patterns matches any item, everything under the selected directory becomes a deletion target. Especially when using `--force`, verify that the intended patterns match items. When using `--root`, verify that the displayed directory is the intended location. A filesystem's top-level directory cannot be selected for processing.
+This tool permanently deletes files and directories. Back up important data before running it. Before deleting anything, use `--dry-run` and review every item. `--summary` omits paths, so do not use it for the pre-deletion review. If none of the supplied keep patterns matches any item, everything under the selected directory becomes a deletion target. Especially when using `--force`, verify that the intended patterns match items. When using `--root`, verify that the displayed directory is the intended location. A filesystem's top-level directory cannot be selected for processing.
 
 ## Installation
 
-To install from source, install Rust 1.85 or later and run this command from the top-level directory of the repository.
+To install from source, install Rust 1.88 or later and run this command from the top-level directory of the repository.
 
 ```sh
 cargo install --path .
@@ -200,6 +200,10 @@ A legend appears after the processing-directory path only when a full path listi
 
 Kept items, deletion targets, and execution results are written to standard output. Warnings, errors, and confirmation prompts are written to standard error. Keep patterns are positional arguments. Reading patterns from standard input and stable machine-readable output are not supported. Parsing standard output from another program is not a supported use case.
 
+## License
+
+This project is dual-licensed. You may choose either `LICENSE-MIT` or `LICENSE-APACHE`. Dependencies are covered by their respective licenses.
+
 ## Developer Documentation
 
 ### Project Structure
@@ -283,7 +287,9 @@ The scan does not follow symbolic links. After `build_plan` returns, the CLI del
 
 ### Building and Validation
 
-This project uses Edition 2024. Use Rust 1.85 or later for development.
+This project uses Edition 2024 and has an MSRV of Rust 1.88. The standard validation environment is GitHub Actions, which runs `cargo fmt --check`, `cargo test`, and `cargo clippy --all-targets -- -D warnings` on Rust 1.88 and stable for Windows and Ubuntu. You can run the same commands locally.
+
+The MSRV is based on the highest declared minimum Rust version among the currently locked dependencies, not solely on Edition 2024's requirements. If dependency updates or code changes require a newer compiler, review the MSRV in `Cargo.toml`, the CI toolchains, and both READMEs in the same change. CI uses `--locked` for tests and Clippy to validate the dependency versions in the lockfile.
 
 ```sh
 cargo fmt --check
@@ -293,11 +299,7 @@ cargo build --release
 cargo doc --no-deps
 ```
 
-To run the same Rust checks on Ubuntu from Windows, run this script from the top-level directory of the repository.
-
-```powershell
-.\local-test-tools\Test-Rust-WSL.ps1
-```
+For additional validation on Ubuntu or WSL, use a repository copy under the Linux home directory and run the desired commands there. Use the Linux-side copy rather than a working copy under `/mnt/...`.
 
 ### Performance Benchmarks
 

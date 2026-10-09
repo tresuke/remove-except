@@ -800,7 +800,6 @@ mod tests {
             true,
         )
         .unwrap();
-        console::set_colors_enabled(colors_were_enabled);
         let colored_output = String::from_utf8(colored_output).unwrap();
         assert!(colored_output.contains("\u{1b}[36m\u{1b}[1mPREVIEW ONLY"));
         assert!(colored_output.contains("Colors: directories ("));
@@ -857,6 +856,7 @@ mod tests {
         let no_kept_parent_output = String::from_utf8(no_kept_parent_output).unwrap();
         assert!(no_kept_parent_output.contains("Colors: directories ("));
         assert!(no_kept_parent_output.contains("kept parents ("));
+        console::set_colors_enabled(colors_were_enabled);
     }
 
     #[test]
