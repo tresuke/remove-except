@@ -1,6 +1,6 @@
 [package]
 name = "remove-except"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 rust-version = "1.88"
 description = "A Rust CLI to keep selected paths or glob matches and remove everything else under a root."
