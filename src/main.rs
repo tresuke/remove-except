@@ -1,6 +1,5 @@
 //! Displays a keep/deletion plan beneath the current directory and deletes items after confirmation.
 
-use std::cmp::Ordering;
 use std::fs;
 use std::io::{self, BufWriter, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -23,7 +22,7 @@ const HELP_STYLES: Styles = Styles::styled()
     version,
     about = "Keep matching items and remove the rest under a processing root",
     long_about = "Keep items matching one or more paths or glob patterns and remove the rest under the selected root. Multiple patterns are combined with OR. Always review the plan before deleting items.",
-    after_long_help = "Output:\n  Tree: directories end with / and symlinks with @. With color, directories are blue, symlinks cyan, and kept parent directories in the delete tree green. Without color, kept parents end with +.\n  Flat: ItemType identifies each entry. Without color, directory and symlink paths end with / and @. Flat output has no kept-parent marker.\n  Status labels: PREVIEW ONLY (cyan), CONFIRM TO DELETE (yellow), FORCE DELETE (red), NO REMOVALS (green).\n  Colors are used automatically when output is a terminal and color is available.",
+    after_long_help = "Output:\n  Tree: directories end with / and symlinks with @. With color, directories are blue, symlinks cyan, and kept parent directories in the delete tree green. Without color, kept parents end with +.\n  Flat: ItemType identifies each entry. Without color, directory and symlink paths end with / and @. Flat output has no kept-parent marker.\n  Status labels: NO REMOVALS (green) when there are no deletion operations; otherwise PREVIEW ONLY (cyan) for dry runs, CONFIRM TO DELETE (yellow) when confirmation is required, FORCE DELETE (red) with --force.\n  Colors are used automatically when output is a terminal and color is available.",
     styles = HELP_STYLES
 )]
 struct Args {
@@ -303,10 +302,10 @@ fn render_plan(
     sort_by_type: bool,
     colors_enabled: bool,
 ) -> io::Result<()> {
-    let (status_label, status_detail) = if dry_run {
-        ("PREVIEW ONLY", "Nothing will be removed")
-    } else if plan.delete_roots().is_empty() {
+    let (status_label, status_detail) = if plan.delete_roots().is_empty() {
         ("NO REMOVALS", "No deletion operations are needed")
+    } else if dry_run {
+        ("PREVIEW ONLY", "Nothing will be removed")
     } else if force {
         (
             "FORCE DELETE",
@@ -316,10 +315,10 @@ fn render_plan(
         ("CONFIRM TO DELETE", "Review both lists before confirming")
     };
     let mode = if colors_enabled {
-        if dry_run {
-            style(status_label).cyan().bold().to_string()
-        } else if plan.delete_roots().is_empty() {
+        if plan.delete_roots().is_empty() {
             style(status_label).green().bold().to_string()
+        } else if dry_run {
+            style(status_label).cyan().bold().to_string()
         } else if force {
             style(status_label).red().bold().to_string()
         } else {
@@ -480,7 +479,8 @@ fn print_item_section(
         }
     } else {
         let mut ordered_items: Vec<_> = items.iter().collect();
-        ordered_items.sort_unstable_by(|left, right| compare_tree_order(left, right));
+        ordered_items
+            .sort_unstable_by(|left, right| left.relative_path().cmp(right.relative_path()));
         print_tree_items(output, &ordered_items, "", "", options.colors_enabled)?;
     }
     Ok(())
@@ -563,29 +563,6 @@ fn print_tree_items(
         start = end;
     }
     Ok(())
-}
-
-fn compare_tree_order(left: &PlannedItem, right: &PlannedItem) -> Ordering {
-    let mut left_parts = left.relative_path().split('/').peekable();
-    let mut right_parts = right.relative_path().split('/').peekable();
-
-    loop {
-        match (left_parts.next(), right_parts.next()) {
-            (Some(left_part), Some(right_part)) if left_part == right_part => {}
-            (Some(left_part), Some(right_part)) => {
-                let left_is_directory =
-                    left_parts.peek().is_some() || left.item_type() == ItemType::Directory;
-                let right_is_directory =
-                    right_parts.peek().is_some() || right.item_type() == ItemType::Directory;
-                return right_is_directory
-                    .cmp(&left_is_directory)
-                    .then_with(|| left_part.cmp(right_part));
-            }
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (None, None) => return Ordering::Equal,
-        }
-    }
 }
 
 fn item_type_name(item_type: ItemType) -> &'static str {
@@ -744,7 +721,6 @@ mod tests {
             return;
         }
         let plan = build_plan(temp.path(), &["kept-parent/keep.txt".to_owned()]).unwrap();
-
         let _color_test_guard = COLOR_TEST_LOCK.lock().unwrap();
         let colors_were_enabled = console::colors_enabled();
         console::set_colors_enabled(true);
@@ -780,6 +756,7 @@ mod tests {
         temp.child("group/keep.txt").write_str("keep").unwrap();
         temp.child("group/remove.txt").write_str("remove").unwrap();
         let plan = build_plan(temp.path(), &["group/keep.txt".to_owned()]).unwrap();
+        let plan_without_deletions = build_plan(temp.path(), &[".".to_owned()]).unwrap();
 
         let mut plain_output = Vec::new();
         render_plan(
@@ -863,6 +840,23 @@ mod tests {
         assert!(flat_output.contains("directories (\u{1b}[34mblue"));
         assert!(flat_output.contains("symlinks (\u{1b}[36mcyan"));
         assert!(!flat_output.contains("kept parents green"));
+
+        let mut no_kept_parent_output = Vec::new();
+        render_plan(
+            &mut no_kept_parent_output,
+            &plan_without_deletions,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+        )
+        .unwrap();
+        let no_kept_parent_output = String::from_utf8(no_kept_parent_output).unwrap();
+        assert!(no_kept_parent_output.contains("Colors: directories ("));
+        assert!(no_kept_parent_output.contains("kept parents ("));
     }
 
     #[test]
@@ -903,6 +897,10 @@ mod tests {
                 .starts_with("FORCE DELETE  Confirmation is disabled; validation still applies")
         );
         assert!(
+            render_status(&plan_without_deletions, true, false, false)
+                .starts_with("NO REMOVALS  No deletion operations are needed")
+        );
+        assert!(
             render_status(&plan_without_deletions, false, false, false)
                 .starts_with("NO REMOVALS  No deletion operations are needed")
         );
@@ -912,7 +910,7 @@ mod tests {
         console::set_colors_enabled(true);
         let confirm_output = render_status(&plan_with_deletions, false, false, true);
         let force_output = render_status(&plan_with_deletions, false, true, true);
-        let no_removals_output = render_status(&plan_without_deletions, false, false, true);
+        let no_removals_output = render_status(&plan_without_deletions, true, false, true);
         console::set_colors_enabled(colors_were_enabled);
 
         assert!(confirm_output.contains("\u{1b}[33m"));
@@ -928,5 +926,6 @@ mod tests {
         assert!(help.contains("\u{1b}["));
         assert!(help.contains("Usage:"));
         assert!(help.contains("--dry-run"));
+        assert!(help.contains("NO REMOVALS (green) when there are no deletion operations"));
     }
 }

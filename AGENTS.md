@@ -4,9 +4,11 @@
 
 - The Rust CLI is the sole maintained implementation. Do not add or restore parallel PowerShell or Bash implementations unless explicitly requested.
 - Keep the package name and command name as `remove-except`.
+- Keep `--root` as the sole option for selecting the processing directory. Do not add aliases unless explicitly requested.
 - CLI positional arguments are paths or glob patterns to keep. Do not change the command or package name, and explain the argument meaning in the help and both READMEs.
 - At least one keep pattern is required. Multiple patterns use OR semantics: an item is kept if it matches any pattern. Preserve the short forms `-n` for `--dry-run` and `-f` for `--force`, as well as the long forms.
 - `README.ja.md` is the source of truth for user-facing behavior. `README.md` is its English counterpart. Update both in the same change whenever CLI behavior or user-facing specifications change.
+- Keep both READMEs easy to scan: put a complete options table near the Quick Start, group detailed user rules by topic rather than dense lists, and keep developer instructions in a separate final section. In Japanese prose, call the selected directory the "処理対象ディレクトリー" and the filesystem's top-level directory the "ファイルシステム最上位のディレクトリー". Preserve literal CLI options, output labels, and API identifiers such as `root()`.
 - If confirmed specifications, designs, or operational practices diverge from this file, describe the divergence and proposed update and obtain the user's approval before changing `AGENTS.md`. If the user explicitly permits an update without further confirmation during the same session, update only within that scope; this permission does not carry over to later sessions. Do not add undecided proposals or temporary work status as permanent rules.
 - Write the general specifications in both READMEs for users of the distributed Rust CLI, using generic directory examples and the `remove-except` command. Put developer utilities and manual fixture setup instructions in developer sections.
 - Keep the dependencies already adopted in `Cargo.toml` (runtime: `clap`, `globset`, `walkdir`, `dialoguer`, `anyhow`, `console`; Windows-only: `regex-automata`, `unicode-casefold`; tests: `assert_cmd`, `assert_fs`). Do not add dependencies for functionality available from existing crates. If a custom domain error type is needed, consider adding `thiserror` or replacing `anyhow`.
@@ -14,7 +16,7 @@
 
 ## Safety and Behavior
 
-- This program deletes files. Keep validation and removal-plan creation separate from actual deletion, and show a preview before confirmation. `--dry-run` must not modify the filesystem. `--force` skips confirmation only; it must not bypass validation.
+- This program deletes files. Keep validation and removal-plan creation separate from actual deletion, and show a preview before confirmation. `--dry-run` must not modify the filesystem. Normal execution displays both lists, then asks whether to proceed: `y`/`yes` confirms, while `n` or Enter cancels; the default is No. `--force` skips only this prompt and must not bypass validation. Document these confirmation inputs in both READMEs.
 - If no item matches a keep pattern, every item under the processing root becomes a deletion target. Preserve the warning and, especially when using `--force`, make sure that no matches is intentional.
 - Previews and confirmation output during normal execution must show both kept items and deletion targets. Show pattern matches and required ancestors in a separate section from deletion targets.
 - In the default `--layout tree`, color real directory names blue and symbolic-link names cyan on a TTY. Color a kept parent directory that appears only in the deletion list green. Without color, use `/` for directories, `@` for symbolic links, and `+` for kept parent directories. Do not show deletion-root markers such as `!` in full listings. Every item in the deletion list is a deletion target; show the number of deletion roots only as a separate summary count.

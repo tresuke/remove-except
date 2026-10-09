@@ -493,8 +493,8 @@ fn no_match_warning_names_selected_root() {
 }
 
 #[test]
-// Verify default tree output groups directories and does not show deletion-root markers.
-fn default_display_groups_directories_and_marks_kept_parents_without_root_tags() {
+// Verify default tree output sorts by relative path and does not show deletion-root markers.
+fn default_display_sorts_by_relative_path_and_marks_kept_parents_without_root_tags() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
     temp.child("0-file.txt").write_str("remove").unwrap();
@@ -515,11 +515,11 @@ fn default_display_groups_directories_and_marks_kept_parents_without_root_tags()
     assert!(output.contains("Items to delete (5):"));
     assert!(output.contains("Markers: / directory; @ symlink; + kept parent."));
     assert_eq!(output.matches("Markers:").count(), 1);
+    assert!(output.contains("├── 0-file.txt"));
     assert!(output.contains("├── alpha/"));
     assert!(output.contains("│   └── nested.txt"));
-    assert!(output.contains("├── beta/"));
-    assert!(output.contains("└── 0-file.txt"));
-    assert!(output.find("├── alpha/").unwrap() < output.find("0-file.txt").unwrap());
+    assert!(output.contains("└── beta/"));
+    assert!(output.find("0-file.txt").unwrap() < output.find("├── alpha/").unwrap());
     assert!(!output.contains("!"));
     assert!(!output.contains("[Directory]"));
     assert!(!output.contains("[File]"));
