@@ -12,10 +12,18 @@
 
 ## インストール
 
-ソースからインストールするには Rust 1.88 以降を用意し、リポジトリー直下で実行します。
+現在の `v0.2.4` リリースはソースコードのみを提供します。タグ付きソースからインストールするには Rust 1.88 以降を用意して、次を実行します。
 
 ```sh
-cargo install --path .
+cargo install --git https://github.com/tresuke/remove-except --tag v0.2.4 --locked
+```
+
+リポジトリーを clone した場合は、リポジトリー直下で `cargo install --path . --locked` を実行してインストールすることもできます。
+
+現在、ビルド済み実行ファイルと crates.io パッケージは提供していません。今後の GitHub Release では Windows x64 と Linux x64 の実行ファイルを添付する場合があります。これらの実行ファイルには、脆弱性スキャナーなどで依存 crate の名前とバージョンを確認できるよう、[`cargo-auditable`](https://github.com/rust-secure-code/cargo-auditable) で依存関係情報を埋め込む予定です。また、配布アーカイブには GitHub Actions のビルド来歴証明を付与する予定です。これは実行ファイルの安全性を保証するものではありません。Linux版は Ubuntu 22.04 でビルドし、glibc 2.35 以降が必要です。Release に実行ファイルが添付されている場合は、利用環境に合うアーカイブを選び、付属の SHA-256 ファイルで検証してください。来歴証明は GitHub CLI で次のように検証できます。
+
+```sh
+gh attestation verify <archive-path> --repo tresuke/remove-except --signer-workflow tresuke/remove-except/.github/workflows/prepare-release.yml
 ```
 
 ## クイックスタート
@@ -308,6 +316,27 @@ cargo doc --no-deps
 ```
 
 UbuntuまたはWSLで追加検証する場合は、リポジトリーをLinuxホームディレクトリー配下に用意し、その中で必要なコマンドを実行してください。WSLの `/mnt/...` 上の作業コピーではなく、Linux側の作業コピーを使います。
+
+### リリースの準備
+
+公開済みの `v0.2.4` はソースコードのみのリリースで、変更しません。今後のバージョンをリリースする場合は、`Cargo.toml` と `Cargo.lock` のルートパッケージバージョンをPRで更新し、必須チェック成功後にマージして、更新後の `main` のCIも確認します。リリース内容を承認した後、新しいバージョンタグを作成してpushします。例:
+
+```sh
+git tag -a vX.Y.Z -m "remove-except vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+手動起動の **Prepare Release** workflow は、バージョンタグを実行対象として選択します（GitHub CLI では `gh workflow run prepare-release.yml --ref vX.Y.Z`）。タグが `main` 上にあり、パッケージバージョンと一致することを確認してください。タグを実行対象にすることで、来歴証明が実際にビルドしたタグのコミットを示します。workflow は Windows x64 と Linux x64 の実行ファイルをテストし、`cargo audit` でロックファイルとビルド後の実行ファイルを検査します。バージョンを固定した `cargo-auditable` で依存関係情報を埋め込んでビルドした後、実行ファイル、両 README、ライセンスをアーカイブにまとめ、SHA-256 checksum と GitHub Actions の来歴証明を生成し、GitHub Release のドラフトを作成または更新します。埋め込まれる情報は依存 crate の名前とバージョンであり、脆弱性検査やサプライチェーン攻撃の防御を代替するものではありません。Linux版は保守中のrunner上の Ubuntu 22.04 コンテナーでビルドし、glibc 2.35 以降を必要とします。タグのpushだけではReleaseは公開されません。ドラフトの対象コミット、生成されたリリースノート、アーカイブ、checksum、来歴証明を確認してから、GitHub上で手動公開します。
+
+crates.io 配布の準備では、Cargo package の収録内容を確認します。
+
+```sh
+cargo package --list --locked
+cargo package --locked
+cargo publish --dry-run --locked
+```
+
+manifestの許可リストにより、リポジトリー専用指示、テスト、手動fixture、開発用ユーティリティはpackageから除外されます。dry-runが成功してもcrateは公開されません。crates.ioへの公開は、明示的に承認された後でmaintainerがローカル認証情報を使って手動で行います。crates.io tokenをリポジトリーやRelease workflowへ追加しないでください。
 
 ### パフォーマンス計測
 
