@@ -12,10 +12,18 @@ This tool permanently deletes files and directories. Back up important data befo
 
 ## Installation
 
-To install from source, install Rust 1.88 or later and run this command from the top-level directory of the repository.
+The current `v0.2.4` release provides source code only. To install it from the tagged source, install Rust 1.88 or later and run:
 
 ```sh
-cargo install --path .
+cargo install --git https://github.com/tresuke/remove-except --tag v0.2.4 --locked
+```
+
+You can also clone the repository and install from its top-level directory with `cargo install --path . --locked`.
+
+Prebuilt binaries and a crates.io package are not currently available. Future GitHub Releases may include Windows x64 and Linux x64 binaries. These binaries are planned to embed dependency information with [`cargo-auditable`](https://github.com/rust-secure-code/cargo-auditable), allowing scanners to identify dependency crate names and versions. Release archives are also planned to include GitHub Actions build provenance attestations. Neither embedded dependency data nor an attestation guarantees that a binary is safe. The Linux binary is built with Ubuntu 22.04 and requires glibc 2.35 or later. When a release includes binary assets, choose the archive matching your platform and verify it against the accompanying SHA-256 file. Verify its provenance with GitHub CLI:
+
+```sh
+gh attestation verify <archive-path> --repo tresuke/remove-except --signer-workflow tresuke/remove-except/.github/workflows/prepare-release.yml
 ```
 
 ## Quick Start
@@ -306,6 +314,27 @@ cargo doc --no-deps
 ```
 
 For additional validation on Ubuntu or WSL, use a repository copy under the Linux home directory and run the desired commands there. Use the Linux-side copy rather than a working copy under `/mnt/...`.
+
+### Preparing a Release
+
+The published `v0.2.4` release is source-only and is immutable. Do not add binary assets or change its contents after publication. For a future version, update `Cargo.toml` and the root package entry in `Cargo.lock` in a PR, merge it after all required checks pass, and verify the resulting `main` CI. After approving the release contents, create and push a new version tag, for example:
+
+```sh
+git tag -a vX.Y.Z -m "remove-except vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+The manually dispatched **Prepare Release** workflow must be run from the version tag (with GitHub CLI: `gh workflow run prepare-release.yml --ref vX.Y.Z`). Verify that the tag points to a commit on `main` and matches the package version. Running from the tag ensures the provenance attestation identifies the commit actually built. The workflow tests Windows x64 and Linux x64 binaries, audits the lockfile and each resulting binary with `cargo audit`, and builds with a pinned version of `cargo-auditable` to embed dependency information. It then packages the executable with both READMEs and licenses, calculates SHA-256 checksums, attests each archive with GitHub Actions, and creates or updates a draft GitHub Release. The embedded data records dependency crate names and versions; it does not replace vulnerability scanning or defend against supply-chain attacks. The Linux binary is built in an Ubuntu 22.04 container on a maintained runner and requires glibc 2.35 or later. A tag push does not publish a release. Review the draft's target, generated notes, archives, checksums, and attestations, then publish it manually in GitHub.
+
+Check Cargo package contents before preparing crates.io distribution:
+
+```sh
+cargo package --list --locked
+cargo package --locked
+cargo publish --dry-run --locked
+```
+
+The manifest allowlist excludes repository-only instructions, tests, manual fixtures, and developer utilities. A successful dry run does not publish the crate. crates.io publication remains a separate manual action requiring explicit approval and the maintainer's local credentials; never put a crates.io token in the repository or the release workflow.
 
 ### Performance Benchmarks
 
