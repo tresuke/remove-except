@@ -4,8 +4,26 @@ version = "0.2.4"
 edition = "2024"
 rust-version = "1.88"
 description = "A Rust CLI to keep selected paths or glob matches and remove everything else under a root."
+readme = "README.md"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/tresuke/remove-except"
+documentation = "https://docs.rs/remove-except"
+keywords = ["cli", "filesystem", "cleanup", "glob", "deletion"]
+categories = ["command-line-utilities", "filesystem"]
+include = [
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/README.ja.md",
+    "/LICENSE-APACHE",
+    "/LICENSE-MIT",
+    "/src/**",
+    "/benches/plan_generation.rs",
+]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--generate-link-to-definition"]
 
 [dependencies]
 anyhow = "1"

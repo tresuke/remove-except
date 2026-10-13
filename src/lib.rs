@@ -1,11 +1,76 @@
-//! Creates a plan that keeps matching items and removes all others.
+#![warn(missing_docs)]
+
+//! Safe removal plan generation for cleaning directories while keeping specified items.
 //!
-//! [`build_plan`] scans beneath the root without including the root itself.
-//! Multiple keep patterns may be provided; matching items and their ancestors are kept.
-//! Plan creation does not change the filesystem. The returned plan is a snapshot from the
-//! time of the scan; it does not reflect later filesystem changes or perform deletion.
-//! Case matching uses Unicode simple case folding (non-Turkic) on Windows and is
-//! case-sensitive on Ubuntu. Per-directory NTFS case-sensitivity settings are ignored.
+//! `remove-except` scans beneath a chosen processing root, compares discovered filesystem
+//! items against one or more keep patterns, and creates an in-memory [`RemovalPlan`].
+//! The plan partitions items into kept entries (including required ancestor directories)
+//! and deletion targets.
+//!
+//! # Safety by Design
+//!
+//! - **Separation of Planning and Deletion**: [`build_plan`] is strictly read-only.
+//!   It traverses the filesystem to capture a point-in-time snapshot and does not create,
+//!   modify, or delete any files or directories.
+//! - **Root Protection**: The processing root itself is never included in the plan,
+//!   and filesystem roots (such as `/` on Unix or `C:\` on Windows) are rejected to prevent
+//!   catastrophic deletion.
+//! - **No Symlink Traversal**: Symbolic links encountered beneath the root are never followed.
+//!   Each link is evaluated as an individual leaf item; if targeted for deletion, only the
+//!   symbolic link itself is deleted, never its target.
+//!
+//! # Pattern Matching Syntax and Semantics
+//!
+//! At least one keep pattern must be provided. When multiple patterns are given, an item
+//! is kept if it matches **any** pattern (logical OR):
+//!
+//! - `*` matches any sequence of non-separator characters within a single directory component.
+//! - `?` matches any single non-separator character.
+//! - `**` matches zero or more directory levels.
+//! - `[...]` matches any character in the character class, adhering to standard glob rules.
+//! - `.` or `./` represents the processing root and keeps everything beneath it.
+//! - A literal directory path keeps that directory and all of its contents recursively.
+//! - A glob match keeps the matching item and all required ancestor directories up to the root,
+//!   but does *not* recursively keep unmatched descendants. For instance, `dir/*` matches
+//!   items directly beneath `dir/`, but does not recursively keep unmatched contents of
+//!   subdirectories beneath them.
+//! - Relative patterns are resolved relative to the processing root. Paths containing `..`
+//!   traversals outside the root are rejected.
+//! - Leading and trailing whitespace in patterns is preserved.
+//!
+//! # Platform Differences
+//!
+//! - **Windows**: Path matching uses Unicode simple case folding (non-Turkic), ignoring
+//!   per-directory NTFS case-sensitivity settings.
+//! - **Linux / Unix**: Path matching is strictly case-sensitive.
+//!
+//! # Examples
+//!
+//! ```
+//! use remove_except::build_plan;
+//! use std::fs::{self, File};
+//!
+//! // Set up a temporary directory structure:
+//! let temp_dir = std::env::temp_dir().join(format!("remove_except_example_{}", std::process::id()));
+//! let _ = fs::remove_dir_all(&temp_dir);
+//! fs::create_dir_all(temp_dir.join("src")).unwrap();
+//! File::create(temp_dir.join("src/main.rs")).unwrap();
+//! File::create(temp_dir.join("notes.txt")).unwrap();
+//!
+//! // Build a removal plan keeping only files inside `src/`:
+//! let plan = build_plan(&temp_dir, &["src/**".to_owned()])
+//!     .expect("valid root and keep patterns");
+//!
+//! // The plan identifies kept items and ancestors:
+//! assert!(plan.keep_items().iter().any(|item| item.relative_path() == "src/main.rs"));
+//! assert!(plan.keep_items().iter().any(|item| item.relative_path() == "src"));
+//!
+//! // Deletion roots identify top-level removal targets:
+//! assert!(plan.delete_roots().iter().any(|item| item.relative_path() == "notes.txt"));
+//!
+//! // Clean up temporary fixtures:
+//! let _ = fs::remove_dir_all(&temp_dir);
+//! ```
 
 use std::path::{Path, PathBuf};
 
@@ -20,38 +85,63 @@ pub use model::{ItemType, PlannedItem, RemovalPlan};
 use path::{display_path, is_drive_relative_path, is_filesystem_root};
 use pattern::compile_patterns;
 
-/// Scans beneath the root and creates a plan of items to keep and delete.
+/// Scans beneath the specified root directory and constructs a [`RemovalPlan`].
 ///
-/// Patterns specify items to keep. With multiple patterns, an item is kept if it matches
-/// any pattern, along with its ancestors. `*` and `?` do not cross path separators, while
-/// `**` matches across multiple levels. A literal directory path keeps its contents recursively.
-/// Leading and trailing whitespace in patterns is preserved. Relative patterns are resolved
-/// from the root; `.` components and repeated separators are normalized. Patterns containing
-/// `..` are rejected. Relative roots are resolved from the process current directory.
+/// Discovered filesystem entries are evaluated against the provided `patterns`. An item is
+/// kept if it matches any pattern (logical OR). When an item is kept, all of its ancestor
+/// directories up to `root` are also kept to preserve directory hierarchy.
 ///
-/// Symbolic links are not followed and are treated as individual items. The root directory
-/// itself is not included in the keep or delete lists. Plan creation does not modify files;
-/// the result is a snapshot from the time of the scan. Filesystem changes after planning are
-/// not automatically revalidated.
+/// # Arguments
+///
+/// * `root` - Path to the directory to scan. Relative paths are resolved against the current
+///   working directory. Filesystem roots (e.g. `/` on Unix, `C:\` on Windows) and Windows
+///   drive-relative paths (e.g. `C:foo`) are rejected.
+/// * `patterns` - One or more keep patterns. Patterns may be literal relative paths or glob
+///   patterns (`*`, `?`, `**`, `[...]`). Literal directories match recursively. Relative
+///   patterns are resolved relative to `root`. Patterns traversing outside `root` via `..`
+///   are rejected. Leading and trailing whitespace is preserved.
+///
+/// # Safety and Behavior
+///
+/// - **Read-Only**: This function only traverses and reads directory metadata. It does not
+///   modify, create, or delete any files.
+/// - **No Symlink Traversal**: Symbolic links beneath `root` are treated as individual leaf
+///   items and are never followed.
+/// - **Root Exclusion**: The `root` directory itself is never included in the plan.
+/// - **Snapshot Semantics**: The returned plan represents a snapshot captured at scan time.
+///   Filesystem modifications occurring after plan construction are not automatically reflected.
 ///
 /// # Errors
 ///
-/// Returns an error if no pattern is provided, a pattern is empty or has an invalid glob,
-/// a pattern traverses to a parent directory, or an absolute pattern is outside the root.
-/// An error is also returned if the root is a filesystem root or is not a directory, or if
-/// resolving or scanning the root fails. Exact error messages are not a stable API contract.
+/// Returns an error in the following circumstances (exact error message strings are not part
+/// of the stable API contract):
+///
+/// - **Pattern errors**: `patterns` is empty, a pattern contains invalid glob syntax, or a
+///   pattern escapes `root` (e.g., starts with `../` or resolves to an ancestor).
+/// - **Root errors**: `root` does not exist, is not a directory, is a filesystem root,
+///   or is a Windows drive-relative path.
+/// - **I/O errors**: Directory traversal fails due to filesystem permissions or I/O errors.
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```
 /// use remove_except::build_plan;
-/// use std::path::Path;
+/// use std::fs::{self, File};
 ///
-/// let plan = build_plan(Path::new("work"), &["*.md".to_owned()])
-///     .expect("the root and pattern should be valid");
-/// for item in plan.delete_roots() {
-///     println!("{}", item.relative_path());
-/// }
+/// let temp_dir = std::env::temp_dir().join(format!("build_plan_test_{}", std::process::id()));
+/// let _ = fs::remove_dir_all(&temp_dir);
+/// fs::create_dir_all(temp_dir.join("docs")).unwrap();
+/// File::create(temp_dir.join("docs/guide.md")).unwrap();
+/// File::create(temp_dir.join("temp.log")).unwrap();
+///
+/// let plan = build_plan(&temp_dir, &["docs/**".to_owned()])
+///     .expect("plan construction should succeed");
+///
+/// assert_eq!(plan.direct_match_count(), 1);
+/// assert!(plan.keep_items().iter().any(|item| item.relative_path() == "docs/guide.md"));
+/// assert!(plan.delete_roots().iter().any(|item| item.relative_path() == "temp.log"));
+///
+/// let _ = fs::remove_dir_all(&temp_dir);
 /// ```
 pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
     if patterns.is_empty() {
