@@ -1,12 +1,15 @@
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+#[cfg(windows)]
+use anyhow::Context;
+use anyhow::Result;
 use globset::GlobBuilder;
 #[cfg(not(windows))]
 use globset::{GlobSet, GlobSetBuilder};
 #[cfg(windows)]
 use regex_automata::meta::Regex;
 
+use crate::error::{invalid, invalid_with_source};
 use crate::path::{
     is_absolute_pattern, is_drive_relative_path, normalize_absolute_for_match, path_matches_prefix,
     paths_equal,
@@ -90,17 +93,19 @@ pub(super) fn compile_patterns(root: &Path, patterns: &[String]) -> Result<Compi
 
     for raw in patterns {
         if raw.is_empty() {
-            bail!("Pattern must not be empty");
+            return Err(invalid("Pattern must not be empty"));
         }
         if raw.split(['/', '\\']).any(|component| component == "..") {
-            bail!("Parent directory traversal is not allowed in pattern: {raw}");
+            return Err(invalid(format!(
+                "Parent directory traversal is not allowed in pattern: {raw}"
+            )));
         }
 
         let pattern = normalize_pattern(&root_text, raw)?;
         let glob = GlobBuilder::new(&pattern)
             .literal_separator(true)
             .build()
-            .with_context(|| format!("Invalid glob pattern: {raw}"))?;
+            .map_err(|error| invalid_with_source(error, format!("Invalid glob pattern: {raw}")))?;
         #[cfg(windows)]
         regexes.push(windows_glob_regex(&glob)?);
         #[cfg(not(windows))]
@@ -147,7 +152,9 @@ impl CompiledPatterns {
 /// Converts an absolute pattern to a root-relative pattern and rejects paths outside the root.
 pub(super) fn normalize_pattern(root_text: &str, pattern: &str) -> Result<String> {
     if is_drive_relative_path(pattern) {
-        bail!("Drive-relative patterns are not supported: {pattern}");
+        return Err(invalid(format!(
+            "Drive-relative patterns are not supported: {pattern}"
+        )));
     }
 
     let normalized = normalize_absolute_for_match(pattern);
@@ -156,7 +163,9 @@ pub(super) fn normalize_pattern(root_text: &str, pattern: &str) -> Result<String
     if is_absolute_pattern(pattern) {
         let boundary_root = root_text.trim_end_matches('/');
         let Some(relative) = strip_case_insensitive_prefix(&normalized, boundary_root) else {
-            bail!("Absolute pattern is outside the processing root: {pattern}");
+            return Err(invalid(format!(
+                "Absolute pattern is outside the processing root: {pattern}"
+            )));
         };
         Ok(normalize_relative_pattern(relative))
     } else {

@@ -1,5 +1,5 @@
 use assert_fs::prelude::*;
-use remove_except::{ItemType, build_plan};
+use remove_except::{ItemType, ValidationError, build_plan};
 
 #[test]
 fn public_getters_describe_a_non_mutating_removal_plan() {
@@ -37,6 +37,29 @@ fn public_api_reports_invalid_patterns_without_relying_on_error_text() {
     let temp = assert_fs::TempDir::new().unwrap();
 
     assert!(build_plan(temp.path(), &[String::new()]).is_err());
+}
+
+#[test]
+fn validation_errors_are_identifiable_by_type() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("file.txt").write_str("file").unwrap();
+    let root = temp.path();
+
+    for (root, patterns) in [
+        (root.to_path_buf(), vec![]),
+        (root.to_path_buf(), vec![String::new()]),
+        (root.to_path_buf(), vec!["[".to_owned()]),
+        (root.to_path_buf(), vec!["../outside".to_owned()]),
+        (root.join("missing"), vec!["*".to_owned()]),
+        (root.join("file.txt"), vec!["*".to_owned()]),
+    ] {
+        let error = build_plan(&root, &patterns).unwrap_err();
+        assert!(
+            error.downcast_ref::<ValidationError>().is_some(),
+            "root: {}, patterns: {patterns:?}",
+            root.display()
+        );
+    }
 }
 
 #[test]

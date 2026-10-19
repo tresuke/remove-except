@@ -675,7 +675,7 @@ fn help_documents_layout_and_summary_options() {
         .clone();
     let output = String::from_utf8_lossy(&output);
 
-    assert!(output.contains("<KEEP_PATTERN>..."));
+    assert!(output.contains("[KEEP_PATTERN]..."));
     assert!(output.contains("--layout <LAYOUT>"));
     assert!(output.contains("[default: tree]"));
     assert!(output.contains("--summary <SECTION>"));
@@ -952,7 +952,7 @@ fn missing_patterns_are_rejected() {
         .unwrap()
         .arg("--dry-run")
         .assert()
-        .failure()
+        .code(2)
         .get_output()
         .stderr
         .clone();
@@ -972,7 +972,7 @@ fn confirmation_defaults_to_no() {
         .args(["--summary", "both", "keep-nothing"])
         .write_stdin("n\n")
         .assert()
-        .success()
+        .code(3)
         .get_output()
         .clone();
 
@@ -997,7 +997,7 @@ fn confirmation_shows_both_item_lists_before_prompt_and_preserves_items_on_rejec
         .arg("keep.txt")
         .write_stdin("n\n")
         .assert()
-        .success()
+        .code(3)
         .get_output()
         .clone();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1032,4 +1032,342 @@ fn force_with_summary_options_still_removes_unmatched_items() {
 
     temp.child("keep.txt").assert("keep");
     assert!(!temp.path().join("remove.txt").exists());
+}
+
+fn parse_json_stdout(output: &std::process::Output) -> serde_json::Value {
+    serde_json::from_slice(&output.stdout).expect("stdout must contain exactly one JSON value")
+}
+
+fn relative_paths(plan: &serde_json::Value, section: &str) -> Vec<String> {
+    plan[section]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["relative_path"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// Builds a command that cannot open a controlling terminal for confirmation.
+fn command_without_terminal() -> Command {
+    let binary = assert_cmd::cargo::cargo_bin("remove-except");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        let mut command = std::process::Command::new(binary);
+        command.creation_flags(DETACHED_PROCESS);
+        Command::from_std(command)
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = std::process::Command::new("setsid");
+        command.arg(binary);
+        Command::from_std(command)
+    }
+}
+
+#[test]
+// Verify stdin patterns strip a leading BOM and line endings, skip empty lines, and keep other text literally.
+fn stdin_patterns_are_read_one_per_line_and_combined_with_positional_patterns() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    for name in [
+        "keep.txt",
+        "#hash",
+        " spaced",
+        "positional.txt",
+        "remove.txt",
+    ] {
+        temp.child(name).write_str("data").unwrap();
+    }
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--dry-run",
+            "--format",
+            "json",
+            "--patterns-from-stdin",
+            "positional.txt",
+        ])
+        .write_stdin("\u{feff}keep.txt\r\n\r\n\n#hash\n spaced\n")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let plan = parse_json_stdout(&output);
+    assert_eq!(
+        relative_paths(&plan, "keep_items"),
+        [" spaced", "#hash", "keep.txt", "positional.txt"]
+    );
+    assert_eq!(relative_paths(&plan, "delete_items"), ["remove.txt"]);
+    temp.child("remove.txt").assert("data");
+}
+
+#[test]
+// Verify invalid UTF-8 on stdin is rejected with its line number before anything is deleted.
+fn stdin_patterns_reject_invalid_utf8_with_line_number() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--patterns-from-stdin"])
+        .write_stdin(b"keep.txt\n\xff\n".as_slice())
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+
+    assert!(String::from_utf8_lossy(&output.stderr).contains("line 2 is not valid UTF-8"));
+    assert!(output.stdout.is_empty());
+    temp.child("remove.txt").assert("remove");
+}
+
+#[test]
+// Verify UTF-16 input without a BOM is rejected instead of producing patterns that match nothing.
+fn stdin_patterns_reject_utf16_without_bom() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    let utf16: Vec<u8> = "keep.txt\n"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--patterns-from-stdin"])
+        .write_stdin(utf16)
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+
+    assert!(String::from_utf8_lossy(&output.stderr).contains("NUL character"));
+    assert!(output.stdout.is_empty());
+    temp.child("keep.txt").assert("keep");
+}
+
+#[test]
+// Verify stdin containing only empty lines still requires at least one keep pattern.
+fn stdin_with_only_empty_lines_is_rejected() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--patterns-from-stdin"])
+        .write_stdin("\r\n\n")
+        .assert()
+        .code(2)
+        .get_output()
+        .stderr
+        .clone();
+
+    assert!(String::from_utf8_lossy(&output).contains("At least one pattern"));
+    temp.child("remove.txt").assert("remove");
+}
+
+#[test]
+// Verify stdin patterns never take a confirmation answer from the consumed input stream.
+fn stdin_patterns_without_terminal_do_not_delete() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+
+    let output = command_without_terminal()
+        .current_dir(temp.path())
+        .arg("--patterns-from-stdin")
+        .write_stdin("keep.txt\ny\n")
+        .assert()
+        .code(3)
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("No terminal is available to confirm deletion"));
+    temp.child("keep.txt").assert("keep");
+    temp.child("remove.txt").assert("remove");
+}
+
+#[test]
+// Verify --force deletes with stdin patterns without needing a terminal.
+fn stdin_patterns_with_force_delete_without_terminal() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+
+    command_without_terminal()
+        .current_dir(temp.path())
+        .args(["--force", "--patterns-from-stdin"])
+        .write_stdin("keep.txt\n")
+        .assert()
+        .success();
+
+    temp.child("keep.txt").assert("keep");
+    assert!(!temp.path().join("remove.txt").exists());
+}
+
+#[test]
+// Verify JSON output contains the complete plan and nothing else on stdout.
+fn json_dry_run_outputs_complete_plan_only() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep/nested/keep.txt")
+        .write_str("keep")
+        .unwrap();
+    temp.child("keep/remove.txt").write_str("remove").unwrap();
+    temp.child("old/file.txt").write_str("remove").unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--format", "json", "keep/nested/keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let plan = parse_json_stdout(&output);
+    let canonical_root = std::fs::canonicalize(temp.path()).unwrap();
+    assert_eq!(plan["schema_version"], 1);
+    assert_eq!(plan["root"], canonical_root.to_str().unwrap());
+    assert_eq!(plan["direct_match_count"], 1);
+    assert_eq!(
+        relative_paths(&plan, "keep_items"),
+        ["keep", "keep/nested", "keep/nested/keep.txt"]
+    );
+    assert_eq!(
+        relative_paths(&plan, "delete_items"),
+        ["keep/remove.txt", "old", "old/file.txt"]
+    );
+    assert_eq!(
+        relative_paths(&plan, "delete_roots"),
+        ["keep/remove.txt", "old"]
+    );
+    assert_eq!(plan["keep_items"][0]["type"], "directory");
+    assert_eq!(plan["delete_items"][0]["type"], "file");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains('\u{1b}'));
+    temp.child("old/file.txt").assert("remove");
+}
+
+#[test]
+// Verify JSON mode keeps execution messages and prompts on stderr.
+fn json_execution_keeps_stdout_machine_readable() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+
+    let declined = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--format", "json", "keep.txt"])
+        .write_stdin("n\n")
+        .assert()
+        .code(3)
+        .get_output()
+        .clone();
+    parse_json_stdout(&declined);
+    let declined_stderr = String::from_utf8_lossy(&declined.stderr);
+    assert!(declined_stderr.contains("Are you sure you want to delete the above items?"));
+    assert!(declined_stderr.contains("Aborted."));
+    temp.child("remove.txt").assert("remove");
+
+    let forced = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--format", "json", "keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    parse_json_stdout(&forced);
+    assert!(String::from_utf8_lossy(&forced.stderr).contains("Removal complete."));
+    temp.child("keep.txt").assert("keep");
+    assert!(!temp.path().join("remove.txt").exists());
+}
+
+#[test]
+// Verify human-oriented display options cannot be combined with JSON output.
+fn json_rejects_display_options() {
+    for options in [
+        ["--summary", "both"].as_slice(),
+        ["--layout", "tree"].as_slice(),
+        ["--layout", "flat"].as_slice(),
+        ["--sort-by-type"].as_slice(),
+    ] {
+        Command::cargo_bin("remove-except")
+            .unwrap()
+            .args(["--dry-run", "--format", "json"])
+            .args(options)
+            .arg("keep.txt")
+            .assert()
+            .code(2);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+// Verify JSON output fails before printing or deleting when a path is not valid Unicode.
+fn json_rejects_non_unicode_paths_before_output() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    let invalid_name = std::ffi::OsStr::from_bytes(b"bad-\xff.txt");
+    std::fs::write(temp.path().join(invalid_name), "remove").unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--format", "json", "keep.txt"])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be represented as Unicode"));
+    assert!(temp.path().join(invalid_name).exists());
+}
+
+#[test]
+// Verify invalid patterns and roots use the input-error exit code.
+fn validation_errors_use_exit_code_two() {
+    let temp = assert_fs::TempDir::new().unwrap();
+
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "["])
+        .assert()
+        .code(2);
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--root", "missing-directory", "keep.txt"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+// Verify help documents pipeline options and exit codes.
+fn help_documents_pipeline_options_and_exit_codes() {
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8_lossy(&output);
+
+    assert!(output.contains("--patterns-from-stdin"));
+    assert!(output.contains("--format <FORMAT>"));
+    assert!(output.contains("schema_version 1"));
+    assert!(output.contains("Exit codes:"));
 }

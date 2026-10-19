@@ -74,13 +74,16 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use walkdir::WalkDir;
 
+mod error;
 mod model;
 mod path;
 mod pattern;
 
+pub use error::ValidationError;
+use error::{invalid, invalid_with_source};
 pub use model::{ItemType, PlannedItem, RemovalPlan};
 use path::{display_path, is_drive_relative_path, is_filesystem_root};
 use pattern::compile_patterns;
@@ -118,9 +121,12 @@ use pattern::compile_patterns;
 ///
 /// - **Pattern errors**: `patterns` is empty, a pattern contains invalid glob syntax, or a
 ///   pattern escapes `root` (e.g., starts with `../` or resolves to an ancestor).
-/// - **Root errors**: `root` does not exist, is not a directory, is a filesystem root,
+/// - **Root errors**: `root` cannot be resolved, is not a directory, is a filesystem root,
 ///   or is a Windows drive-relative path.
 /// - **I/O errors**: Directory traversal fails due to filesystem permissions or I/O errors.
+///
+/// Pattern and root errors carry a [`ValidationError`] that can be detected with
+/// [`anyhow::Error::downcast_ref`]. Traversal errors do not.
 ///
 /// # Examples
 ///
@@ -145,25 +151,32 @@ use pattern::compile_patterns;
 /// ```
 pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
     if patterns.is_empty() {
-        bail!("At least one pattern is required");
+        return Err(invalid("At least one pattern is required"));
     }
     if is_drive_relative_path(&root.to_string_lossy()) {
-        bail!(
+        return Err(invalid(format!(
             "Drive-relative root paths are not supported: {}",
             root.display()
-        );
+        )));
     }
 
-    let root = std::fs::canonicalize(root)
-        .with_context(|| format!("Failed to resolve root directory: {}", root.display()))?;
+    let root = std::fs::canonicalize(root).map_err(|error| {
+        invalid_with_source(
+            error,
+            format!("Failed to resolve root directory: {}", root.display()),
+        )
+    })?;
     if is_filesystem_root(&root) {
-        bail!(
+        return Err(invalid(format!(
             "Filesystem roots cannot be used as processing roots: {}",
             root.display()
-        );
+        )));
     }
     if !root.is_dir() {
-        bail!("Root path is not a directory: {}", root.display());
+        return Err(invalid(format!(
+            "Root path is not a directory: {}",
+            root.display()
+        )));
     }
 
     let compiled_patterns = compile_patterns(&root, patterns)?;
