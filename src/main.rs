@@ -260,7 +260,7 @@ fn run(args: Args) -> Result<Outcome> {
     if !args.force {
         let has_summaries = keep_summary || delete_summary;
         let confirmed = if args.patterns_from_stdin {
-            match confirm_on_terminal(confirmation_prompt(has_summaries)) {
+            match confirm_on_terminal(confirmation_prompt(has_summaries))? {
                 Some(confirmed) => confirmed,
                 None => {
                     eprintln!(
@@ -525,20 +525,21 @@ fn is_affirmative(answer: &str) -> bool {
 
 /// Asks for confirmation on the controlling terminal instead of standard input.
 ///
-/// Returns `None` when no terminal can be opened or read, so the caller can stop
-/// without deleting anything.
-fn confirm_on_terminal(prompt: &str) -> Option<bool> {
+/// Returns `Ok(None)` when no terminal can be opened, so the caller can stop without
+/// deleting anything. Failures after the terminal is open are returned as errors.
+fn confirm_on_terminal(prompt: &str) -> Result<Option<bool>> {
     #[cfg(windows)]
     const TERMINAL_INPUT: &str = "CONIN$";
     #[cfg(not(windows))]
     const TERMINAL_INPUT: &str = "/dev/tty";
 
-    let terminal = fs::OpenOptions::new()
-        .read(true)
-        .open(TERMINAL_INPUT)
-        .ok()?;
-    write_prompt(prompt).ok()?;
-    read_confirmation(BufReader::new(terminal)).ok()
+    let Ok(terminal) = fs::OpenOptions::new().read(true).open(TERMINAL_INPUT) else {
+        return Ok(None);
+    };
+    write_prompt(prompt)?;
+    let confirmed = read_confirmation(BufReader::new(terminal))
+        .context("Failed to read confirmation from the terminal")?;
+    Ok(Some(confirmed))
 }
 
 fn print_plan(

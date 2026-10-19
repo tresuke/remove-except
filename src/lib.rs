@@ -40,15 +40,16 @@
 //!   subdirectories beneath them. Likewise, `dir/**` does not match `dir` itself, and an
 //!   escaped name such as `backup[[]2025]` keeps only that directory; append `/**` to keep
 //!   its contents.
-//! - Relative patterns are resolved relative to the processing root. Paths containing `..`
-//!   traversals outside the root are rejected.
+//! - Relative patterns are resolved relative to the processing root. Patterns containing a
+//!   `..` component are rejected.
 //! - Leading and trailing whitespace in patterns is preserved.
 //!
 //! # Platform Differences
 //!
 //! - **Windows**: Path matching uses Unicode simple case folding (non-Turkic), ignoring
 //!   per-directory NTFS case-sensitivity settings.
-//! - **Linux / Unix**: Path matching is strictly case-sensitive.
+//! - **Ubuntu**: Path matching is strictly case-sensitive. Windows and Ubuntu are the
+//!   supported platforms.
 //!
 //! # Examples
 //!
@@ -106,9 +107,11 @@ use pattern::compile_patterns;
 ///   working directory. Filesystem roots (e.g. `/` on Unix, `C:\` on Windows) and Windows
 ///   drive-relative paths (e.g. `C:foo`) are rejected.
 /// * `patterns` - One or more keep patterns. Patterns may be literal relative paths or glob
-///   patterns (`*`, `?`, `**`, `[...]`). Literal directories match recursively. Relative
-///   patterns are resolved relative to `root`. Patterns traversing outside `root` via `..`
-///   are rejected. Leading and trailing whitespace is preserved.
+///   patterns (`*`, `?`, `**`, `[...]`, `{a,b}`; on non-Windows platforms `\` escapes the
+///   next character). Literal directories without glob syntax match recursively; glob
+///   matches do not keep unmatched descendants. Relative patterns are resolved relative to
+///   `root`. Patterns containing a `..` component are rejected. Leading and trailing
+///   whitespace is preserved.
 ///
 /// # Safety and Behavior
 ///

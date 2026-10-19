@@ -781,21 +781,13 @@ fn delete_summary_hides_only_delete_paths() {
 
 #[test]
 // Verify --summary both summarizes both kept items and deletion targets.
-fn summary_only_matches_both_section_summary_options() {
+// Verify --summary both replaces both path sections with counts and keeps files in a dry run.
+fn summary_both_shows_counts_for_both_sections() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
     temp.child("remove.txt").write_str("remove").unwrap();
 
-    let summary_only = Command::cargo_bin("remove-except")
-        .unwrap()
-        .current_dir(temp.path())
-        .args(["--dry-run", "--summary", "both", "keep.txt"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let both_summaries = Command::cargo_bin("remove-except")
+    let output = Command::cargo_bin("remove-except")
         .unwrap()
         .current_dir(temp.path())
         .args(["--dry-run", "--summary", "both", "keep.txt"])
@@ -805,11 +797,12 @@ fn summary_only_matches_both_section_summary_options() {
         .stdout
         .clone();
 
-    assert_eq!(summary_only, both_summaries);
-    let summary_output = String::from_utf8_lossy(&summary_only);
+    let summary_output = String::from_utf8_lossy(&output);
     assert!(summary_output.contains("KEEP:"));
     assert!(summary_output.contains("DELETE:"));
     assert!(summary_output.contains("Summary sections omit paths."));
+    assert!(!summary_output.contains("Items to keep"));
+    assert!(!summary_output.contains("Items to delete"));
     temp.child("remove.txt").assert("remove");
 }
 
@@ -1318,6 +1311,108 @@ fn json_execution_keeps_stdout_machine_readable() {
 }
 
 #[test]
+// Verify a confirmed JSON run keeps the prompt and completion message off stdout.
+fn json_confirmed_execution_keeps_stdout_machine_readable() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--format", "json", "keep.txt"])
+        .write_stdin("y\n")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let plan = parse_json_stdout(&output);
+    assert_eq!(relative_paths(&plan, "delete_roots"), ["remove.txt"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Are you sure you want to delete the above items?"));
+    assert!(stderr.contains("Removal complete."));
+    temp.child("keep.txt").assert("keep");
+    assert!(!temp.path().join("remove.txt").exists());
+}
+
+#[test]
+// Verify the no-match warning goes to stderr while stdout stays a single JSON plan.
+fn json_no_match_warning_stays_on_stderr() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--format", "json", "missing.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let plan = parse_json_stdout(&output);
+    assert_eq!(plan["direct_match_count"], 0);
+    assert_eq!(relative_paths(&plan, "delete_items"), ["remove.txt"]);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("WARNING: No items matched"));
+    temp.child("remove.txt").assert("remove");
+}
+
+#[test]
+// Verify JSON mode does not prompt when the plan has no deletion targets.
+fn json_without_deletion_targets_does_not_prompt() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--format", "json", "keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let plan = parse_json_stdout(&output);
+    assert!(plan["delete_items"].as_array().unwrap().is_empty());
+    assert!(plan["delete_roots"].as_array().unwrap().is_empty());
+    assert!(output.stderr.is_empty());
+    temp.child("keep.txt").assert("keep");
+}
+
+#[test]
+// Verify JSON reports symbolic links with the symlink type.
+fn json_reports_symlink_items() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    let target = temp.path().join("keep.txt");
+    let link = temp.path().join("link");
+
+    #[cfg(unix)]
+    let link_result = std::os::unix::fs::symlink(&target, &link);
+    #[cfg(windows)]
+    let link_result = std::os::windows::fs::symlink_file(&target, &link);
+
+    if link_result.is_err() {
+        eprintln!("Skipping JSON symlink test because symlink creation is unavailable");
+        return;
+    }
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--format", "json", "keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let plan = parse_json_stdout(&output);
+    assert_eq!(plan["delete_items"][0]["relative_path"], "link");
+    assert_eq!(plan["delete_items"][0]["type"], "symlink");
+}
+
+#[test]
 // Verify human-oriented display options cannot be combined with JSON output.
 fn json_rejects_display_options() {
     for options in [
@@ -1366,12 +1461,17 @@ fn json_rejects_non_unicode_paths_before_output() {
 fn validation_errors_use_exit_code_two() {
     let temp = assert_fs::TempDir::new().unwrap();
 
-    Command::cargo_bin("remove-except")
-        .unwrap()
-        .current_dir(temp.path())
-        .args(["--dry-run", "["])
-        .assert()
-        .code(2);
+    for pattern in ["[", "{", "}", "a{b"] {
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["--dry-run", pattern])
+            .assert()
+            .code(2)
+            .get_output()
+            .clone();
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Invalid glob pattern"));
+    }
     Command::cargo_bin("remove-except")
         .unwrap()
         .current_dir(temp.path())
