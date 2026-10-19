@@ -111,7 +111,7 @@ pub(super) fn compile_patterns(root: &Path, patterns: &[String]) -> Result<Compi
         #[cfg(not(windows))]
         builder.add(glob);
 
-        if !pattern.contains(['*', '?', '[']) {
+        if !has_glob_syntax(&pattern) {
             prefixes.push(pattern.trim_end_matches('/').to_owned());
         }
     }
@@ -122,6 +122,19 @@ pub(super) fn compile_patterns(root: &Path, patterns: &[String]) -> Result<Compi
     let matcher = builder.build()?;
 
     Ok(CompiledPatterns { matcher, prefixes })
+}
+
+/// Reports whether a normalized pattern uses glob syntax.
+///
+/// Only patterns without glob syntax also keep everything beneath a matching
+/// directory. Braces are alternation syntax. On non-Windows platforms, a
+/// backslash is a glob escape rather than a path separator.
+fn has_glob_syntax(pattern: &str) -> bool {
+    #[cfg(windows)]
+    const GLOB_SYNTAX: [char; 5] = ['*', '?', '[', '{', '}'];
+    #[cfg(not(windows))]
+    const GLOB_SYNTAX: [char; 6] = ['*', '?', '[', '{', '}', '\\'];
+    pattern.contains(GLOB_SYNTAX)
 }
 
 pub(super) struct CompiledPatterns {

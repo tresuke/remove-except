@@ -985,6 +985,33 @@ fn confirmation_defaults_to_no() {
 }
 
 #[test]
+// Verify partial, unknown, and non-UTF-8 answers all decline without deleting anything.
+fn confirmation_declines_answers_other_than_y_or_yes() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+
+    for answer in [
+        &b"maybe\n"[..],
+        b"yes please\n",
+        b"\x82\xcd\x82\xa2\r\n",
+        b"",
+    ] {
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .arg("keep-nothing")
+            .write_stdin(answer)
+            .assert()
+            .code(3)
+            .get_output()
+            .stdout
+            .clone();
+        assert!(String::from_utf8_lossy(&output).contains("Aborted."));
+        temp.child("remove.txt").assert("remove");
+    }
+}
+
+#[test]
 // Verify normal execution lists kept items and deletion targets before confirmation and preserves files when declined.
 fn confirmation_shows_both_item_lists_before_prompt_and_preserves_items_on_rejection() {
     let temp = assert_fs::TempDir::new().unwrap();

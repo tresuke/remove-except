@@ -28,12 +28,18 @@
 //! - `?` matches any single non-separator character.
 //! - `**` matches zero or more directory levels.
 //! - `[...]` matches any character in the character class, adhering to standard glob rules.
+//! - `{a,b}` matches any of the comma-separated alternatives.
 //! - `.` or `./` represents the processing root and keeps everything beneath it.
-//! - A literal directory path keeps that directory and all of its contents recursively.
+//! - A directory path without glob syntax keeps that directory and all of its contents
+//!   recursively. Glob syntax is `*`, `?`, `[`, `{`, and `}`; on non-Windows platforms,
+//!   `\` is also glob syntax because it escapes the next character. On Windows, `\` is a
+//!   path separator.
 //! - A glob match keeps the matching item and all required ancestor directories up to the root,
 //!   but does *not* recursively keep unmatched descendants. For instance, `dir/*` matches
 //!   items directly beneath `dir/`, but does not recursively keep unmatched contents of
-//!   subdirectories beneath them.
+//!   subdirectories beneath them. Likewise, `dir/**` does not match `dir` itself, and an
+//!   escaped name such as `backup[[]2025]` keeps only that directory; append `/**` to keep
+//!   its contents.
 //! - Relative patterns are resolved relative to the processing root. Paths containing `..`
 //!   traversals outside the root are rejected.
 //! - Leading and trailing whitespace in patterns is preserved.
@@ -456,6 +462,77 @@ mod tests {
                 .iter()
                 .any(|item| item.relative_path == "file3.txt")
         );
+    }
+
+    #[test]
+    // Verify brace alternation is glob syntax, so it does not keep matched directory contents.
+    fn brace_alternation_is_glob_syntax_and_does_not_keep_contents() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("reports/2024/a.txt").write_str("a").unwrap();
+        temp.child("reports/2025/b.txt").write_str("b").unwrap();
+        temp.child("reports/2026/c.txt").write_str("c").unwrap();
+        temp.child("x{1}.txt").write_str("brace").unwrap();
+        temp.child("x1.txt").write_str("plain").unwrap();
+
+        let dirs_only = build_plan(temp.path(), &["reports/{2024,2025}".to_owned()]).unwrap();
+        let kept = |plan: &super::RemovalPlan| {
+            plan.keep_items
+                .iter()
+                .map(|item| item.relative_path.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            kept(&dirs_only),
+            ["reports", "reports/2024", "reports/2025"]
+        );
+
+        let with_contents =
+            build_plan(temp.path(), &["reports/{2024,2025}/**".to_owned()]).unwrap();
+        assert_eq!(
+            kept(&with_contents),
+            [
+                "reports",
+                "reports/2024",
+                "reports/2024/a.txt",
+                "reports/2025",
+                "reports/2025/b.txt"
+            ]
+        );
+
+        // `{1}` is a one-choice alternation, so it matches `x1.txt`, not the literal name.
+        let literal_braces = build_plan(temp.path(), &["x{1}.txt".to_owned()]).unwrap();
+        assert_eq!(kept(&literal_braces), ["x1.txt"]);
+        let escaped_braces = build_plan(temp.path(), &["x[{]1[}].txt".to_owned()]).unwrap();
+        assert_eq!(kept(&escaped_braces), ["x{1}.txt"]);
+    }
+
+    #[test]
+    // Verify an escaped bracket directory name keeps only the directory unless `/**` follows.
+    fn escaped_bracket_directory_needs_globstar_to_keep_contents() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("backup[2025]/a.txt").write_str("a").unwrap();
+
+        let plan = build_plan(temp.path(), &["backup[[]2025]".to_owned()]).unwrap();
+        assert_eq!(plan.keep_items.len(), 1);
+        assert_eq!(plan.delete_items[0].relative_path, "backup[2025]/a.txt");
+
+        let plan = build_plan(temp.path(), &["backup[[]2025]/**".to_owned()]).unwrap();
+        assert!(plan.delete_items.is_empty());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    // Verify a backslash is a glob escape on non-Windows platforms, not a literal prefix.
+    fn backslash_is_glob_escape_on_non_windows() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("subfile.txt").write_str("escaped").unwrap();
+        temp.child("sub\\file.txt/inner.txt")
+            .write_str("literal directory")
+            .unwrap();
+
+        let plan = build_plan(temp.path(), &["sub\\file.txt".to_owned()]).unwrap();
+        assert_eq!(plan.keep_items.len(), 1);
+        assert_eq!(plan.keep_items[0].relative_path, "subfile.txt");
     }
 
     #[test]

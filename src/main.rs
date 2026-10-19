@@ -10,7 +10,6 @@ use anyhow::{Context, Result};
 use clap::builder::styling::{AnsiColor, Styles};
 use clap::{CommandFactory, Parser, ValueEnum};
 use console::style;
-use dialoguer::Confirm;
 use remove_except::{ItemType, PlannedItem, RemovalPlan, ValidationError, build_plan};
 use serde::Serialize;
 
@@ -500,23 +499,24 @@ fn confirmation_prompt(has_summaries: bool) -> &'static str {
 
 fn confirm_deletion(has_summaries: bool) -> Result<bool> {
     let prompt = confirmation_prompt(has_summaries);
+    write_prompt(prompt)?;
+    read_confirmation(io::stdin().lock()).context("Failed to read confirmation")
+}
 
-    if io::stdin().is_terminal() {
-        return Confirm::new()
-            .with_prompt(prompt)
-            .default(false)
-            .interact()
-            .context("Failed to read confirmation");
-    }
-
-    let stderr = io::stderr();
-    let mut prompt_output = stderr.lock();
+fn write_prompt(prompt: &str) -> io::Result<()> {
+    let mut prompt_output = io::stderr().lock();
     write!(prompt_output, "{prompt} [y/N] ")?;
-    prompt_output.flush()?;
-    drop(prompt_output);
-    let mut answer = String::new();
-    io::stdin().read_line(&mut answer)?;
-    Ok(is_affirmative(&answer))
+    prompt_output.flush()
+}
+
+/// Reads one full answer line, so a partial `y` keypress never confirms on its own.
+///
+/// Input that is not valid UTF-8, such as a non-UTF-8 console code page, is decoded
+/// lossily; anything other than `y` or `yes` declines.
+fn read_confirmation(mut input: impl BufRead) -> io::Result<bool> {
+    let mut answer = Vec::new();
+    input.read_until(b'\n', &mut answer)?;
+    Ok(is_affirmative(&String::from_utf8_lossy(&answer)))
 }
 
 fn is_affirmative(answer: &str) -> bool {
@@ -537,17 +537,8 @@ fn confirm_on_terminal(prompt: &str) -> Option<bool> {
         .read(true)
         .open(TERMINAL_INPUT)
         .ok()?;
-    let mut prompt_output = io::stderr().lock();
-    write!(prompt_output, "{prompt} [y/N] ").ok()?;
-    prompt_output.flush().ok()?;
-    drop(prompt_output);
-
-    let mut answer = Vec::new();
-    BufReader::new(terminal)
-        .read_until(b'\n', &mut answer)
-        .ok()?;
-    // Console input may use a non-UTF-8 code page; anything other than y/yes declines.
-    Some(is_affirmative(&String::from_utf8_lossy(&answer)))
+    write_prompt(prompt).ok()?;
+    read_confirmation(BufReader::new(terminal)).ok()
 }
 
 fn print_plan(
@@ -913,8 +904,8 @@ fn remove_file_or_directory_link(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Args, InputError, flat_item_type_rank, read_patterns, render_plan, style_flat_item,
-        tree_item_suffix,
+        Args, InputError, flat_item_type_rank, read_confirmation, read_patterns, render_plan,
+        style_flat_item, tree_item_suffix,
     };
     use assert_fs::prelude::*;
     use clap::CommandFactory;
@@ -924,6 +915,19 @@ mod tests {
 
     #[cfg(windows)]
     use super::display_root_path;
+
+    #[test]
+    // Verify only a whole `y` or `yes` line confirms; partial or other answers decline.
+    fn read_confirmation_requires_a_full_affirmative_line() {
+        for answer in ["y\n", "YES\r\n", " yes \n", "y"] {
+            assert!(read_confirmation(answer.as_bytes()).unwrap(), "{answer:?}");
+        }
+        for answer in ["", "\n", "n\n", "maybe\n", "yes please\n", "ye\n", "y es\n"] {
+            assert!(!read_confirmation(answer.as_bytes()).unwrap(), "{answer:?}");
+        }
+        assert!(!read_confirmation(b"\xff\xfe\n".as_slice()).unwrap());
+        assert!(!read_confirmation("n\ny\n".as_bytes()).unwrap());
+    }
 
     #[test]
     // Verify stdin patterns strip only a leading BOM and line terminators and skip empty lines.

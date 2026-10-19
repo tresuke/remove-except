@@ -20,6 +20,8 @@ cargo install --git https://github.com/tresuke/remove-except --tag v0.2.4 --lock
 
 You can also clone the repository and install from its top-level directory with `cargo install --path . --locked`.
 
+`v0.2.4` does not include `--patterns-from-stdin` and `--format json` (described in “Pipeline Integration”), exit codes `2` and `3`, or line-based confirmation input. To use them before the next release, install from the default branch by omitting `--tag`.
+
 Prebuilt binaries and a crates.io package are not currently available. Future GitHub Releases may include Windows x64 and Linux x64 binaries. These binaries are planned to embed dependency information with [`cargo-auditable`](https://github.com/rust-secure-code/cargo-auditable), allowing scanners to identify dependency crate names and versions. Release archives are also planned to include GitHub Actions build provenance attestations. Neither embedded dependency data nor an attestation guarantees that a binary is safe. The Linux binary is built with Ubuntu 22.04 and requires glibc 2.35 or later. When a release includes binary assets, choose the archive matching your platform and verify it against the accompanying SHA-256 file. Verify its provenance with GitHub CLI:
 
 ```sh
@@ -36,7 +38,7 @@ First, use `--dry-run` to review which items will be kept and deleted.
 remove-except --dry-run keep.txt keep '**/*.md'
 ```
 
-To perform deletion, omit `--dry-run`. In a normal run, the tool displays the kept items and deletion targets, then asks whether to proceed. Enter `y` or `yes` to delete; enter `n` or press Enter to cancel (the default is No). With `--force`, deletion proceeds without prompting. Invalid patterns or an invalid directory still produce an error.
+To perform deletion, omit `--dry-run`. In a normal run, the tool displays the kept items and deletion targets, then asks whether to proceed. Type `y` or `yes` and press Enter to delete; `n`, an empty Enter, or any other answer cancels (the default is No). With `--force`, deletion proceeds without prompting. Invalid patterns or an invalid directory still produce an error.
 
 ```sh
 remove-except keep.txt keep '**/*.md'
@@ -148,13 +150,21 @@ By default, the tool recursively processes the current directory from which it w
 
 At least one keep pattern is required. Patterns are positional arguments or, with `--patterns-from-stdin`, lines read from standard input (see “Pipeline Integration”). With multiple patterns, an item is kept if it matches any one of them. Leading or trailing spaces are part of the item name. Quote patterns containing spaces so the shell passes each pattern as one argument.
 
-Relative patterns are resolved from the selected processing directory. Absolute patterns are accepted only when they are inside that directory. Relative patterns and the portion of an absolute pattern after the matching directory prefix normalize `.` components and repeated separators. For absolute patterns, separators are converted to `/` before matching the directory prefix; the prefix itself is not normalized. Patterns outside the selected directory, patterns containing `..` as a path component, empty patterns, and ambiguous Windows drive-relative paths (for example, `C:folder`) are errors.
+Relative patterns are resolved from the selected processing directory. Absolute patterns are accepted only when they are inside that directory. Relative patterns and the portion of an absolute pattern after the matching directory prefix normalize `.` components and repeated separators; the prefix itself is not normalized. On Windows, `\` is converted to the `/` separator before matching. On Ubuntu, `\` is not a separator but a glob escape character. Patterns outside the selected directory, patterns containing `..` as a path component, empty patterns, and ambiguous Windows drive-relative paths (for example, `C:folder`) are errors.
+
+Absolute patterns are compared with the processing directory after symbolic links and similar indirections are resolved (the path shown after `Root:` in the output). If `--root` or the current directory goes through a link, an absolute pattern written with the link path is treated as outside the processing directory and fails. Use relative patterns in that case.
 
 ### Matching and Retention
 
-`*`, `**`, `?`, and character classes `[]` are supported. `*` and `?` do not cross `/`; `**` matches across multiple levels. `**/` matches zero or more directory levels. Patterns can match files, directories, and symbolic links. Quote globs to prevent shell expansion.
+`*`, `**`, `?`, character classes `[]`, and alternation `{a,b}` are supported. `*` and `?` do not cross `/`; `**` matches across multiple levels. `**/` matches zero or more directory levels. `{2024,2025}` matches either string. Patterns can match files, directories, and symbolic links. Quote globs to prevent shell expansion.
 
 A matched item and its parent directories are kept, but unmatched descendants are not. A directory path without a glob keeps that directory and all of its contents. `dir/*` matches only items directly under `dir`; it does not recursively keep the contents of matched subdirectories. `.` and `./` keep everything under the processing directory.
+
+The glob characters are `*`, `?`, `[`, `{`, and `}`. On Ubuntu, `\` is also a glob character because it escapes the next character. A pattern containing any of them is treated as a glob and does not keep the contents of matched directories. For example, `reports/{2024,2025}` keeps only the two directories. To keep their contents too, append `/**`, as in `reports/{2024,2025}/**`, or specify `reports/2024` and `reports/2025` separately.
+
+`dir/**` matches items under `dir` but not `dir` itself, so an empty `dir` becomes a deletion target. To keep a directory even when it is empty, specify `dir` without a glob.
+
+To match a glob character literally, wrap it in a character class, such as `[*]`, `[?]`, `[[]`, `[{]`, or `[}]`. For example, `x{1}.txt` is an alternation that matches `x1.txt`, so use `x[{]1[}].txt` for the file with that exact name. An escaped pattern is still a glob, so to also keep the contents of a directory named `backup[2025]`, specify `backup[[]2025]/**`. An unclosed `{` or `[`, or a lone `}`, is an invalid glob and fails with exit code 2.
 
 ### Filesystem Behavior
 
@@ -166,9 +176,9 @@ A symbolic link supplied to `--root` is resolved to its target. Links under the 
 
 The default `--layout tree` shows kept items and deletion targets as a tree; `--layout flat` shows `ItemType` and `RelativePath` columns. Pattern matches and required ancestors are shown separately from deletion targets. Both layouts use relative-path order by default. `--sort-by-type` requires `--layout flat` and sorts by Directory, File, then Symlink, with relative-path order within each type. Sorting affects display only, not the displayed lists or deletion order. See “Output and Options” for display details.
 
-In a normal run, the tool displays both lists and asks whether to proceed with deletion. Enter `y` or `yes` to delete; enter `n` or press Enter to cancel (the default is No). A cancelled run exits with code 3. With `--force`, deletion proceeds without prompting. Invalid patterns or an invalid processing directory still produce an error.
+In a normal run, the tool displays both lists and asks whether to proceed with deletion. The answer is read as a whole line: `y` or `yes` (case-insensitive, ignoring surrounding whitespace) deletes. `n`, an empty Enter, any other answer, or end of input (EOF) cancels. A cancelled run exits with code 3. With `--force`, deletion proceeds without prompting. Invalid patterns or an invalid processing directory still produce an error.
 
-Kept items, deletion targets, and execution results go to standard output. Warnings, errors, and confirmation prompts go to standard error. Standard output in the default `human` format is intended for people and may change in future versions. Use `--format json` when another program needs to parse the plan.
+In the default `human` format, kept items, deletion targets, and execution results go to standard output. Warnings, errors, and confirmation prompts go to standard error. With `--format json`, only the plan JSON goes to standard output, and execution result messages also go to standard error. Standard output in the `human` format is intended for people and may change in future versions. Use `--format json` when another program needs to parse the plan.
 
 If none of the supplied keep patterns matches any item, a warning is shown and everything under the processing directory becomes a deletion target. Review the targets with a dry run before deleting.
 
@@ -208,11 +218,11 @@ A legend appears after the processing-directory path only when a full path listi
 
 `--summary keep|delete|both` replaces selected sections with counts and no paths. Keep counts include required ancestors and separately report direct pattern matches. Deletion-item counts and the number of top-level deletion operations are distinct. Since summaries omit paths, review every item with `--dry-run` and without `--summary` before deleting.
 
-Kept items, deletion targets, and execution results are written to standard output. Warnings, errors, and confirmation prompts are written to standard error. Parsing `human` standard output (including colors, legends, tree or flat layouts, and summaries) from another program is not a supported use case.
+In the `human` format, kept items, deletion targets, and execution results are written to standard output. Warnings, errors, and confirmation prompts are written to standard error (see “JSON Output” for `--format json`). Parsing `human` standard output (including colors, legends, tree or flat layouts, and summaries) from another program is not a supported use case.
 
 ## Pipeline Integration
 
-`--patterns-from-stdin` and `--format json` let you combine the tool with other commands in PowerShell or Bash. Passing patterns through standard input and receiving the plan as JSON can be used separately or together.
+`--patterns-from-stdin` and `--format json` let you combine the tool with other commands in PowerShell or Bash. Passing patterns through standard input and receiving the plan as JSON can be used separately or together. These features are not included in `v0.2.4` (see “Installation”).
 
 ### Patterns from Standard Input
 
@@ -221,7 +231,8 @@ With `--patterns-from-stdin`, standard input is read as one pattern per line.
 - Input must be UTF-8. If a line is not valid UTF-8 or contains a NUL character, the command reports its line number and exits with code 2. UTF-16 input without a BOM also contains NUL characters and is rejected this way. A single byte-order mark (BOM) at the start of the input is removed.
 - Lines may end with LF or CRLF. Only the line terminator is removed; other whitespace is kept as part of the name. A CR at the end of a final line without a line terminator is also kept.
 - Completely empty lines are ignored. A line containing only spaces is treated as a whitespace pattern.
-- There is no comment syntax such as `#`. Each line is interpreted as a path or glob, just like a positional argument. When passing file names directly, names containing glob characters such as `*`, `?`, or `[` may match unintended items. Use a character class such as `[[]` to match such a character literally.
+- There is no comment syntax such as `#`.
+- Each line is interpreted as a path or glob, just like a positional argument, not as a literal file name. When file names printed by another command are passed directly, names containing glob characters (`*`, `?`, `[`, `{`, `}`, and `\` on Ubuntu) may match other items or fail as invalid globs. A directory whose name contains glob characters does not keep its contents. See “Matching and Retention” for escaping and appending `/**`.
 - Positional patterns may be combined with stdin patterns; all patterns use OR semantics. If no pattern remains after empty lines are ignored, the command fails.
 - NUL-delimited input is not supported. File names containing newlines cannot be passed as patterns.
 - Without a pipe or redirection, you can type patterns in the terminal, one per line. The command writes a note to standard error that it is waiting for input and how to finish. Finish input with Ctrl+D on Ubuntu, or Ctrl+Z followed by Enter on Windows.
@@ -236,13 +247,23 @@ git -c core.quotePath=false ls-files | remove-except --dry-run --patterns-from-s
 
 The `git ls-files` list does not include `.git` itself, so the example keeps `.git` with a positional argument. Without it, the repository's own `.git` also becomes a deletion target. Untracked and ignored files (such as build output and local settings) become deletion targets, so review every item with `--dry-run` before running the command for real.
 
+Use this example as is only when tracked file names contain no newlines, tabs, `"`, `\`, or glob characters. Even with `core.quotePath=false`, Git prints names containing newlines, tabs, `"`, or `\` in quotes, so those files do not match and become deletion targets. Names containing glob characters may match other items.
+
 PowerShell example (keep patterns listed in a file, plus `*.md`):
 
 ```powershell
 Get-Content -Encoding UTF8 .\keep-list.txt | remove-except --dry-run --patterns-from-stdin '*.md'
 ```
 
-Windows PowerShell 5.1 does not use UTF-8 by default for text piped to external commands. Before passing patterns containing non-ASCII characters, run `$OutputEncoding = [System.Text.UTF8Encoding]::new($false)`. PowerShell 7 and later use UTF-8 by default.
+On Windows, PowerShell does not necessarily use UTF-8 when exchanging text with external commands. Text sent to an external command uses `$OutputEncoding`, and output read from an external command uses `[Console]::OutputEncoding`. In Windows PowerShell 5.1, `$OutputEncoding` is not UTF-8 by default. Even in PowerShell 7 and later, `[Console]::OutputEncoding` defaults to the console code page (such as Shift_JIS on Japanese Windows). When patterns or paths contain non-ASCII characters, run the following first in any PowerShell version.
+
+```powershell
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = $utf8
+[Console]::OutputEncoding = $utf8
+```
+
+Both settings are needed when passing the output of an external command such as `git ls-files` to `remove-except`, and when receiving JSON output.
 
 ### JSON Output
 
@@ -280,7 +301,7 @@ Each item has `relative_path` (a `/`-separated path relative to the processing d
 `--format json` output is the plan before deletion, not the result of execution.
 
 - With `--dry-run`: the plan is printed and nothing is deleted.
-- Without `--dry-run`: the plan is printed, then confirmation is requested. A cancelled run exits with code 3.
+- Without `--dry-run`: the plan is printed, then confirmation is requested. A cancelled run exits with code 3. Because the JSON is printed before deletion, use the exit code (`0` for completed deletion, `3` for cancellation) to tell whether anything was deleted.
 - With `--force`: the plan is printed, then items are deleted without confirmation.
 
 `--summary`, `--layout`, and `--sort-by-type` are for human-readable output and cannot be combined with `--format json` (exit code 2).
@@ -300,7 +321,7 @@ $plan = remove-except --dry-run --format json '**/*.md' | ConvertFrom-Json
 $plan.delete_items | Where-Object type -eq 'file' | ForEach-Object relative_path
 ```
 
-To receive paths containing non-ASCII characters correctly in Windows PowerShell 5.1, first run `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)`.
+On Windows, even PowerShell 7 and later need `[Console]::OutputEncoding` to be set to receive paths containing non-ASCII characters correctly. See the PowerShell encoding settings in “Patterns from Standard Input”.
 
 ### Exit Codes
 
@@ -330,7 +351,7 @@ This project is dual-licensed. You may choose either `LICENSE-MIT` or `LICENSE-A
 - `src/main.rs`: Parses CLI arguments, reads patterns from standard input, creates and displays the kept-item and deletion-target lists (human-readable and JSON), asks for confirmation, deletes filesystem items, and determines the exit code.
 - `src/lib.rs`: Re-exports the crate's public API and coordinates scanning and `RemovalPlan` creation through `build_plan`.
 - `src/model.rs`: Defines the public data types and read-only getters. `src/pattern.rs` handles glob matching; `src/path.rs` handles path validation and normalization; `src/error.rs` defines the input validation error `ValidationError`.
-- `tests/cli.rs`: Runs the CLI in temporary directories and verifies deletion, confirmation, and display. `tests/library.rs` tests the public library API and platform-specific case matching. Binary unit tests cover colored and uncolored rendering.
+- `tests/cli.rs`: Runs the CLI in temporary directories and verifies deletion, confirmation, display, stdin patterns, JSON output, and exit codes. `tests/library.rs` tests the public library API and platform-specific case matching. Binary unit tests cover colored and uncolored rendering.
 
 ### Run from Source
 
@@ -461,4 +482,4 @@ hyperfine --warmup 3 --runs 10 'target/release/remove-except.exe --dry-run --sum
 
 CLI measurements include process startup, `build_plan`, and output rendering. Do not compare them as if they measured `build_plan` alone, and keep fixture contents identical between runs.
 
-Dependencies are managed in `Cargo.toml`. The CLI uses `clap`, confirmation prompts use `dialoguer`, output styling uses `console`, JSON output uses `serde` and `serde_json`, glob matching uses `globset`, directory traversal uses `walkdir`, and error context uses `anyhow`. Windows Unicode glob matching uses `regex-automata` and `unicode-casefold`.
+Dependencies are managed in `Cargo.toml`. The CLI uses `clap`, output styling uses `console`, JSON output uses `serde` and `serde_json`, glob matching uses `globset`, directory traversal uses `walkdir`, and error context uses `anyhow`. Windows Unicode glob matching uses `regex-automata` and `unicode-casefold`.
