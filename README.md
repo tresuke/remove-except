@@ -20,7 +20,7 @@ cargo install --git https://github.com/tresuke/remove-except --tag v0.2.4 --lock
 
 You can also clone the repository and install from its top-level directory with `cargo install --path . --locked`.
 
-`v0.2.4` does not include `--patterns-from-stdin` and `--format json` (described in “Pipeline Integration”), exit codes `2` and `3`, or line-based confirmation input. To use them before the next release, install from the default branch by omitting `--tag`.
+`v0.2.4` does not include `--patterns-from-stdin` and `--format json` (described in “Pipeline Integration”), exit codes `2` and `3`, or line-based confirmation input. After these changes have been merged to the default branch, you can use them before the next release by installing from that branch without `--tag`.
 
 Prebuilt binaries and a crates.io package are not currently available. Future GitHub Releases may include Windows x64 and Linux x64 binaries. These binaries are planned to embed dependency information with [`cargo-auditable`](https://github.com/rust-secure-code/cargo-auditable), allowing scanners to identify dependency crate names and versions. Release archives are also planned to include GitHub Actions build provenance attestations. Neither embedded dependency data nor an attestation guarantees that a binary is safe. The Linux binary is built with Ubuntu 22.04 and requires glibc 2.35 or later. When a release includes binary assets, choose the archive matching your platform and verify it against the accompanying SHA-256 file. Verify its provenance with GitHub CLI:
 
@@ -30,7 +30,7 @@ gh attestation verify <archive-path> --repo tresuke/remove-except --signer-workf
 
 ## Quick Start
 
-The syntax is `remove-except [OPTIONS] [KEEP_PATTERN]...`. Provide one or more keep patterns as positional arguments. With `--patterns-from-stdin`, patterns are also read from standard input, and the command runs when at least one pattern is provided in total. When you specify multiple patterns, an item is kept if it matches any of them.
+The command syntax is `remove-except [OPTIONS] [KEEP_PATTERN]...`. Positional arguments specify paths or glob patterns to keep. With `--patterns-from-stdin`, provide at least one pattern across both sources; multiple patterns use OR semantics.
 
 First, use `--dry-run` to review which items will be kept and deleted.
 
@@ -38,14 +38,14 @@ First, use `--dry-run` to review which items will be kept and deleted.
 remove-except --dry-run keep.txt keep '**/*.md'
 ```
 
-To perform deletion, omit `--dry-run`. In a normal run, the tool displays the kept items and deletion targets, then asks whether to proceed. Type `y` or `yes` and press Enter to delete; `n`, an empty Enter, or any other answer cancels (the default is No). With `--force`, deletion proceeds without prompting. Invalid patterns or an invalid directory still produce an error.
+To perform deletion, omit `--dry-run`. In a normal run, the tool displays the kept items and deletion targets before asking for confirmation. See “Display and Execution” for the confirmation rules. With `--force`, deletion proceeds without prompting. Invalid patterns or an invalid directory still produce an error.
 
 ```sh
 remove-except keep.txt keep '**/*.md'
 remove-except --force keep.txt keep '**/*.md'
 ```
 
-To process a directory other than the one where the command was started, specify it with `--root`. Relative paths are resolved from the current directory when the command starts.
+Use `--root` to select a different processing directory. Relative paths are resolved from the current directory when the command starts.
 
 ```sh
 remove-except --root work --dry-run keep.txt '**/*.md'
@@ -61,11 +61,13 @@ remove-except --root work --dry-run keep.txt '**/*.md'
 | `-f`, `--force` | Deletes without showing the confirmation prompt. Pattern and directory validation still apply. |
 | `--patterns-from-stdin` | Reads keep patterns from standard input, one per line. They are combined with positional patterns using OR semantics. |
 | `--format <FORMAT>` | Plan output format: `human` (default) or `json`. |
-| `--layout <LAYOUT>` | Output layout: `tree` (default) or `flat`. Cannot be combined with `--format json`. |
-| `--sort-by-type` | Flat layout only. Sorts by Directory, File, then Symlink. Cannot be combined with `--format json`. |
-| `--summary <SECTION>` | Shows counts for `keep`, `delete`, or `both` instead of paths in the selected sections. Cannot be combined with `--format json`. |
+| `--layout <LAYOUT>` | Output layout: `tree` (default) or `flat`. |
+| `--sort-by-type` | Flat layout only. Sorts by Directory, File, then Symlink. |
+| `--summary <SECTION>` | Shows counts for `keep`, `delete`, or `both` instead of paths in the selected sections. |
 | `-h`, `--help` | Displays help. |
 | `-V`, `--version` | Displays the version. |
+
+`--summary`, `--layout`, and `--sort-by-type` are only for human-readable output (`--format human`) and cannot be combined with `--format json`.
 
 ## Patterns and Processing Rules
 
@@ -97,7 +99,7 @@ You can use glob patterns to specify paths to keep. Characters such as `*` and `
 remove-except --dry-run '**/*.md'
 ```
 
-In this example tree, `readme.md` is kept, while `keep.txt`, `todo.txt`, `reports`, and `archive` are shown as deletion targets. The preview displays both kept items and deletion targets. Since `**/` matches zero or more directory levels, `**/*.md` matches paths ending in `.md` directly under the processing directory and in nested directories.
+In this example tree, `readme.md` is kept, while `keep.txt`, `todo.txt`, `reports`, and `archive` are shown as deletion targets. The preview displays both kept items and deletion targets.
 
 Common glob syntax:
 
@@ -114,7 +116,7 @@ To limit a glob to a particular subdirectory, include its path relative to the p
 remove-except --dry-run 'reports/**/*.csv'
 ```
 
-In this example tree, the pattern keeps `reports/report1.csv`, `reports/report2.csv`, and `reports/2025/annual.csv`. Because `**/` matches zero or more directory levels, `reports/**/*.csv` matches paths ending in `.csv` directly under `reports` and at deeper levels. Quote globs to prevent the shell from expanding them before the command runs.
+In this example tree, the pattern keeps `reports/report1.csv`, `reports/report2.csv`, and `reports/2025/annual.csv`. Quote globs to prevent the shell from expanding them before the command runs.
 
 ### Selecting Subdirectories
 
@@ -142,8 +144,6 @@ remove-except --dry-run 'reports/2025/*.csv'
 
 This example keeps `reports/2025/annual.csv`; `reports/2025/notes.txt` is a deletion target. Since `*` matches only within one level, `reports/2025/*.csv` is limited to CSV files directly under `reports/2025`. To include deeper levels, use `reports/2025/**/*.csv`. To keep the entire directory, specify its path, such as `reports/2025`, without a glob.
 
-Use `--dry-run` in any example to review the kept items and deletion targets. Omit `--dry-run` only when you intend to delete. In a normal run, the tool displays both lists and then asks whether to proceed with deletion. The default answer is No.
-
 ### Processing Scope and Paths
 
 By default, the tool recursively processes the current directory from which it was started. Use `--root` to select another processing directory. A relative path supplied to `--root` is resolved from the startup directory. The selected directory itself is never listed or deleted. The filesystem's top-level directory is rejected for safety.
@@ -156,7 +156,7 @@ Absolute patterns are compared with the processing directory after symbolic link
 
 ### Matching and Retention
 
-`*`, `**`, `?`, character classes `[]`, and alternation `{a,b}` are supported. `*` and `?` do not cross `/`; `**` matches across multiple levels. `**/` matches zero or more directory levels. `{2024,2025}` matches either string. Patterns can match files, directories, and symbolic links. Quote globs to prevent shell expansion.
+Patterns support `*`, `**`, `?`, character classes `[]`, and alternation `{a,b}`. Files, directories, and symbolic links can match. See the examples above for `*`, `**`, `?`, a character class, and path-separator behavior. See the rest of this section for alternation and retention rules.
 
 A matched item and its parent directories are kept, but unmatched descendants are not. A directory path without a glob keeps that directory and all of its contents. `dir/*` matches only items directly under `dir`; it does not recursively keep the contents of matched subdirectories. `.` and `./` keep everything under the processing directory.
 
@@ -174,13 +174,11 @@ A symbolic link supplied to `--root` is resolved to its target. Links under the 
 
 ### Display and Execution
 
-The default `--layout tree` shows kept items and deletion targets as a tree; `--layout flat` shows `ItemType` and `RelativePath` columns. Pattern matches and required ancestors are shown separately from deletion targets. Both layouts use relative-path order by default. `--sort-by-type` requires `--layout flat` and sorts by Directory, File, then Symlink, with relative-path order within each type. Sorting affects display only, not the displayed lists or deletion order. See “Output and Options” for display details.
+The default `--layout tree` shows kept items and deletion targets as a tree; `--layout flat` shows `ItemType` and `RelativePath` columns. Pattern matches and required ancestors are shown separately from deletion targets. See “Output and Options” for colors, markers, and sorting.
 
-In a normal run, the tool displays both lists and asks whether to proceed with deletion. The answer is read as a whole line: `y` or `yes` (case-insensitive, ignoring surrounding whitespace) deletes. `n`, an empty Enter, any other answer, or end of input (EOF) cancels. A cancelled run exits with code 3. With `--force`, deletion proceeds without prompting. Invalid patterns or an invalid processing directory still produce an error.
+In a normal run, the tool displays both lists before asking for confirmation. Sections selected by `--summary` show counts instead of path lists. The answer is read as a whole line: `y` or `yes` (case-insensitive, ignoring surrounding whitespace) deletes. `n`, an empty Enter, any other answer, or end of input (EOF) cancels. The default is No; cancellation exits with code 3. `--force` skips only this prompt; invalid patterns or an invalid processing directory still produce an error.
 
-In the default `human` format, kept items, deletion targets, and execution results go to standard output. Warnings, errors, and confirmation prompts go to standard error. With `--format json`, only the plan JSON goes to standard output, and execution result messages also go to standard error. Standard output in the `human` format is intended for people and may change in future versions. Use `--format json` when another program needs to parse the plan.
-
-If none of the supplied keep patterns matches any item, a warning is shown and everything under the processing directory becomes a deletion target. Review the targets with a dry run before deleting.
+If none of the supplied keep patterns matches any item, a warning is shown and everything under the processing directory becomes a deletion target.
 
 ## Output and Options
 
@@ -214,21 +212,21 @@ remove-except --dry-run --summary both keep.txt
 
 ### Legends and Summaries
 
-A legend appears after the processing-directory path only when a full path listing is shown. With color, Tree legends list blue directories, cyan symlinks, and green retained parents; Flat legends list blue directories and cyan symlinks. Without color, `Markers:` explains `/`, `@`, and `+` for Tree, or `/` and `@` for Flat. On a TTY, `--help` subtly styles headings, Usage, option names, and values; it emits no ANSI styling when color is disabled.
+When a full path listing is shown, a legend appears after the processing-directory path. With color, Tree legends list directories (blue), symlinks (cyan), and retained parents (green); Flat legends list directories (blue) and symlinks (cyan). Without color, `Markers:` explains `/`, `@`, and `+` for Tree, or `/` and `@` for Flat. On a TTY, `--help` subtly styles headings, Usage, option names, and values; it emits no ANSI styling when color is disabled.
 
 `--summary keep|delete|both` replaces selected sections with counts and no paths. Keep counts include required ancestors and separately report direct pattern matches. Deletion-item counts and the number of top-level deletion operations are distinct. Since summaries omit paths, review every item with `--dry-run` and without `--summary` before deleting.
 
-In the `human` format, kept items, deletion targets, and execution results are written to standard output. Warnings, errors, and confirmation prompts are written to standard error (see “JSON Output” for `--format json`). Parsing `human` standard output (including colors, legends, tree or flat layouts, and summaries) from another program is not a supported use case.
+In the `human` format, kept items, deletion targets, and execution results are written to standard output. Warnings, errors, and confirmation prompts are written to standard error (see “JSON Output” for `--format json`). Human-readable output is not a stable format for parsing by other programs.
 
 ## Pipeline Integration
 
-`--patterns-from-stdin` and `--format json` let you combine the tool with other commands in PowerShell or Bash. Passing patterns through standard input and receiving the plan as JSON can be used separately or together. These features are not included in `v0.2.4` (see “Installation”).
+`--patterns-from-stdin` and `--format json` let you combine the tool with other commands in PowerShell or Bash. Passing patterns through standard input and receiving the plan as JSON can be used separately or together.
 
 ### Patterns from Standard Input
 
 With `--patterns-from-stdin`, standard input is read as one pattern per line.
 
-- Input must be UTF-8. If a line is not valid UTF-8 or contains a NUL character, the command reports its line number and exits with code 2. UTF-16 input without a BOM also contains NUL characters and is rejected this way. A single byte-order mark (BOM) at the start of the input is removed.
+- Input must be UTF-8. If a line is not valid UTF-8 or contains a NUL character, the command reports its line number and exits with code 2. The command does not detect all BOM-less UTF-16: byte sequences without NUL may be interpreted as different, valid UTF-8 text. A single byte-order mark (BOM) at the start of the input is removed.
 - Lines may end with LF or CRLF. Only the line terminator is removed; other whitespace is kept as part of the name. A CR at the end of a final line without a line terminator is also kept.
 - Completely empty lines are ignored. A line containing only spaces is treated as a whitespace pattern.
 - There is no comment syntax such as `#`.
@@ -255,7 +253,7 @@ PowerShell example (keep patterns listed in a file, plus `*.md`):
 Get-Content -Encoding UTF8 .\keep-list.txt | remove-except --dry-run --patterns-from-stdin '*.md'
 ```
 
-On Windows, PowerShell does not necessarily use UTF-8 when exchanging text with external commands. Text sent to an external command uses `$OutputEncoding`, and output read from an external command uses `[Console]::OutputEncoding`. In Windows PowerShell 5.1, `$OutputEncoding` is not UTF-8 by default. Even in PowerShell 7 and later, `[Console]::OutputEncoding` defaults to the console code page (such as Shift_JIS on Japanese Windows). When patterns or paths contain non-ASCII characters, run the following first in any PowerShell version.
+When passing patterns from PowerShell or reading JSON output, use UTF-8 for text exchange. In Windows PowerShell 5.1, `$OutputEncoding`, which controls text sent to external commands, defaults to ASCII. In PowerShell 7 and later, it defaults to UTF-8, but the setting may have been changed. The following example configures UTF-8 for sending patterns and reading JSON output. No change is needed if the settings already use UTF-8.
 
 ```powershell
 $utf8 = [System.Text.UTF8Encoding]::new($false)
@@ -263,7 +261,7 @@ $OutputEncoding = $utf8
 [Console]::OutputEncoding = $utf8
 ```
 
-Both settings are needed when passing the output of an external command such as `git ls-files` to `remove-except`, and when receiving JSON output.
+`$OutputEncoding` controls how PowerShell sends strings to external commands; `[Console]::OutputEncoding` controls how PowerShell reads external-command output as strings.
 
 ### JSON Output
 
@@ -321,7 +319,7 @@ $plan = remove-except --dry-run --format json '**/*.md' | ConvertFrom-Json
 $plan.delete_items | Where-Object type -eq 'file' | ForEach-Object relative_path
 ```
 
-On Windows, even PowerShell 7 and later need `[Console]::OutputEncoding` to be set to receive paths containing non-ASCII characters correctly. See the PowerShell encoding settings in “Patterns from Standard Input”.
+When reading JSON in PowerShell, also check that it is decoded as UTF-8. See “Patterns from Standard Input” for the configuration example.
 
 ### Exit Codes
 
@@ -336,9 +334,7 @@ If an error occurs during deletion (exit code 1), items already deleted are not 
 
 ## Versioning and Compatibility
 
-During the 0.x series, bug fixes use patch releases. Feature additions, breaking CLI or public library API changes, and increases to the minimum supported Rust version (MSRV) use minor releases. Minor updates may therefore include breaking changes.
-
-Changes affecting which items are kept or deleted, or how deletion is confirmed, are documented in release notes. Even a patch update may change deletion results by fixing a bug. Review the changes when updating and inspect the targets with `--dry-run` before deleting.
+Updates may change which items are kept or deleted, or how deletion is confirmed. Even a patch update may change deletion results by fixing a bug. Review the changes when updating and inspect the targets with `--dry-run` before deleting.
 
 ## License
 
@@ -346,140 +342,6 @@ This project is dual-licensed. You may choose either `LICENSE-MIT` or `LICENSE-A
 
 ## Developer Documentation
 
-### Project Structure
+For development instructions, see the [Development Guide (Japanese, primary)](https://github.com/tresuke/remove-except/blob/main/DEVELOPMENT.ja.md) or its [English translation](https://github.com/tresuke/remove-except/blob/main/DEVELOPMENT.md).
 
-- `src/main.rs`: Parses CLI arguments, reads patterns from standard input, creates and displays the kept-item and deletion-target lists (human-readable and JSON), asks for confirmation, deletes filesystem items, and determines the exit code.
-- `src/lib.rs`: Re-exports the crate's public API and coordinates scanning and `RemovalPlan` creation through `build_plan`.
-- `src/model.rs`: Defines the public data types and read-only getters. `src/pattern.rs` handles glob matching; `src/path.rs` handles path validation and normalization; `src/error.rs` defines the input validation error `ValidationError`.
-- `tests/cli.rs`: Runs the CLI in temporary directories and verifies deletion, confirmation, display, stdin patterns, JSON output, and exit codes. `tests/library.rs` tests the public library API and platform-specific case matching. Binary unit tests cover colored and uncolored rendering.
-
-### Run from Source
-
-During development, run the tool from the top-level directory of the repository with `cargo run --`.
-
-```sh
-cargo run -- --dry-run keep.txt keep '**/*.md'
-```
-
-### Manual Testing
-
-`Prepare-Manual-Test.ps1` creates `manual-test-workspace` and fixture files for manually checking the Rust CLI. `keep-link` is a symbolic link to `keep.txt` used to verify the `@` marker in previews. On Windows, creating symbolic links may require Developer Mode or administrator privileges. Run the script from the top-level directory of the repository.
-
-```powershell
-.\Prepare-Manual-Test.ps1
-Set-Location .\manual-test-workspace
-cargo run --manifest-path ..\Cargo.toml -- --dry-run keep.txt keep '*.md'
-```
-
-The preview lists `keep.txt`, `release-notes.md`, the `keep` directory, and its contents as kept; all other items are deletion targets. To try an actual deletion, omit `--dry-run` and answer `n` at the prompt to cancel. If you perform a deletion, return to the top-level directory of the repository with `Set-Location ..` and rerun the script to restore the known fixtures.
-
-On Ubuntu (including WSL), use `prepare-manual-test.sh` to create the same fixtures. In WSL, work in a repository copy under the Linux home directory rather than under `/mnt/...`. Run these commands from the top-level directory of that copy; ensure that Cargo is available on `PATH`.
-
-```bash
-bash ./prepare-manual-test.sh
-cd manual-test-workspace
-cargo run --manifest-path ../Cargo.toml -- --dry-run keep.txt keep '*.md'
-```
-
-To cancel at the confirmation prompt, omit `--dry-run` and answer `n`. After an actual deletion, return to the top-level directory of the repository copy with `cd ..` and rerun the generator.
-
-Both scripts create or overwrite only known fixture files. They replace `keep-link` only when that known symbolic link points to `keep.txt`. They do not delete other files or links in the directory. Use `-Path` in PowerShell or the optional workspace-path argument in Bash to create fixtures elsewhere. If a regular file or a different link conflicts with `keep-link`, the script reports an error instead of overwriting it.
-
-```powershell
-.\Prepare-Manual-Test.ps1 -Path 'C:\work\manual-fixtures'
-```
-
-```bash
-bash ./prepare-manual-test.sh "$HOME/manual-fixtures"
-```
-
-For a custom workspace location, use the absolute path to the repository's `Cargo.toml` with `--manifest-path` when running Cargo from the fixture directory.
-
-### Library API
-
-The library function `build_plan(root, patterns)` returns a `RemovalPlan` for the selected processing directory and keep patterns. It returns an error if no patterns are provided, a pattern is empty or contains an invalid glob, an absolute pattern is outside the selected directory, a pattern traverses to a parent directory, the selected directory is a filesystem's top-level directory or is not a directory, or a Windows drive-relative path is used. Failing to resolve the selected directory is also an error. These input validation errors can be identified with `anyhow::Error::downcast_ref::<ValidationError>()` without relying on error message text. Filesystem errors during scanning are not `ValidationError`s. `.` and `./` both represent the selected directory and keep everything beneath it.
-
-Read `RemovalPlan` and `PlannedItem` data through their getters. Getters return references and do not allow the `RemovalPlan` contents to be modified. Code that accessed public fields directly should be updated to call the getters.
-
-```rust,no_run
-use remove_except::build_plan;
-use std::path::Path;
-
-let patterns = ["Cargo.toml".to_owned(), "src/**".to_owned()];
-let plan = build_plan(Path::new("."), &patterns).expect("valid plan");
-
-for item in plan.delete_roots() {
-    println!("{}", item.relative_path());
-}
-```
-
-`RemovalPlan` getters:
-
-- `root()`: The normalized processing directory.
-- `direct_match_count()`: The number of items directly matched by patterns; used to determine whether to warn that nothing matched.
-- `keep_items()`: All kept items, including required ancestor directories, sorted by relative path.
-- `delete_items()`: All deletion targets, sorted by relative path.
-- `delete_roots()`: The top-level items passed to deletion. Descendants of deletion-target directories are excluded to avoid redundant recursive deletions.
-
-Each `PlannedItem` can be read through `path()`, `relative_path()`, and `item_type()`. Relative paths use `/` separators. `path()` returns an absolute path under the normalized processing directory. On Windows, the standard library's canonicalized path may include the extended-path prefix `\\?\`.
-
-The scan does not follow symbolic links. After `build_plan` returns, the CLI deletes the items in `delete_roots`. If a filesystem error occurs during deletion, the command exits with an error, but items already deleted before the error cannot be restored.
-
-### Building and Validation
-
-This project uses Edition 2024 and has an MSRV of Rust 1.88. The standard validation environment is GitHub Actions, which runs `cargo fmt --check`, `cargo test`, and `cargo clippy --all-targets -- -D warnings` on Rust 1.88 and stable for Windows and Ubuntu. You can run the same commands locally.
-
-The MSRV is based on the highest declared minimum Rust version among the currently locked dependencies, not solely on Edition 2024's requirements. If dependency updates or code changes require a newer compiler, review the MSRV in `Cargo.toml`, the CI toolchains, and both READMEs in the same change. CI uses `--locked` for tests and Clippy to validate the dependency versions in the lockfile.
-
-```sh
-cargo fmt --check
-cargo test
-cargo clippy --all-targets -- -D warnings
-cargo build --release
-cargo doc --no-deps
-```
-
-For additional validation on Ubuntu or WSL, use a repository copy under the Linux home directory and run the desired commands there. Use the Linux-side copy rather than a working copy under `/mnt/...`.
-
-### Preparing a Release
-
-The published `v0.2.4` release is source-only and is immutable. Do not add binary assets or change its contents after publication. For a future version, update `Cargo.toml` and the root package entry in `Cargo.lock` in a PR, merge it after all required checks pass, and verify the resulting `main` CI. After approving the release contents, create and push a new version tag, for example:
-
-```sh
-git tag -a vX.Y.Z -m "remove-except vX.Y.Z"
-git push origin vX.Y.Z
-```
-
-The manually dispatched **Prepare Release** workflow must be run from the version tag (with GitHub CLI: `gh workflow run prepare-release.yml --ref vX.Y.Z`). Verify that the tag points to a commit on `main` and matches the package version. Running from the tag ensures the provenance attestation identifies the commit actually built. The workflow tests Windows x64 and Linux x64 binaries, audits the lockfile and each resulting binary with `cargo audit`, and builds with a pinned version of `cargo-auditable` to embed dependency information. It then packages the executable with both READMEs and licenses, calculates SHA-256 checksums, attests each archive with GitHub Actions, and creates or updates a draft GitHub Release. The embedded data records dependency crate names and versions; it does not replace vulnerability scanning or defend against supply-chain attacks. The Linux binary is built in an Ubuntu 22.04 container on a maintained runner and requires glibc 2.35 or later. A tag push does not publish a release. Review the draft's target, generated notes, archives, checksums, and attestations, then publish it manually in GitHub.
-
-Check Cargo package contents before preparing crates.io distribution:
-
-```sh
-cargo package --list --locked
-cargo package --locked
-cargo publish --dry-run --locked
-```
-
-The manifest allowlist excludes repository-only instructions, tests, manual fixtures, and developer utilities. A successful dry run does not publish the crate. crates.io publication remains a separate manual action requiring explicit approval and the maintainer's local credentials; never put a crates.io token in the repository or the release workflow.
-
-### Performance Benchmarks
-
-Benchmarks measure `build_plan` using only the standard library and existing development dependencies. They create temporary fixtures before measurement; fixture creation time is excluded. The benchmarks compare a broad 2,080-item tree with one glob, multiple globs, a literal directory, and all items kept; an 8,208-item tree with sparse matches and all items kept; and matches in a deeper tree.
-
-```sh
-cargo bench --bench plan_generation
-cargo bench --bench plan_generation -- --samples 25 --iterations 10
-```
-
-Each case reports the median, sample range, number of scanned items, number of patterns, and approximate items per second. The default of 9 samples × 3 iterations is for quick checks. For performance comparisons, use 25 samples × 10 iterations with the same OS, machine, and arguments, and record the Release-mode results after the build completes.
-
-To benchmark the full CLI, run a dry run of the release binary with `hyperfine`. The following example only reads the manual fixtures and does not delete anything.
-
-```powershell
-cargo build --release
-hyperfine --warmup 3 --runs 10 'target/release/remove-except.exe --dry-run --summary both --root manual-test-workspace keep.txt keep'
-```
-
-CLI measurements include process startup, `build_plan`, and output rendering. Do not compare them as if they measured `build_plan` alone, and keep fixture contents identical between runs.
-
-Dependencies are managed in `Cargo.toml`. The CLI uses `clap`, output styling uses `console`, JSON output uses `serde` and `serde_json`, glob matching uses `globset`, directory traversal uses `walkdir`, and error context uses `anyhow`. Windows Unicode glob matching uses `regex-automata` and `unicode-casefold`.
+Publication of the public library API reference on docs.rs is planned, but it is not available yet.

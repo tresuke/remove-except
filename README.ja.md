@@ -20,7 +20,7 @@ cargo install --git https://github.com/tresuke/remove-except --tag v0.2.4 --lock
 
 リポジトリーを clone した場合は、リポジトリー直下で `cargo install --path . --locked` を実行してインストールすることもできます。
 
-`v0.2.4` には、「パイプラインとの連携」で説明する `--patterns-from-stdin` と `--format json`、終了コード `2` と `3`、1行単位の確認入力は含まれていません。次のリリースより前にこれらを使う場合は、`--tag` を付けずに既定ブランチからインストールしてください。
+`v0.2.4` には、「パイプラインとの連携」で説明する `--patterns-from-stdin` と `--format json`、終了コード `2` と `3`、1行単位の確認入力は含まれていません。これらの変更が既定ブランチにマージされた後であれば、次のリリース前でも `--tag` を付けずに既定ブランチからインストールして利用できます。
 
 現在、ビルド済み実行ファイルと crates.io パッケージは提供していません。今後の GitHub Release では Windows x64 と Linux x64 の実行ファイルを添付する場合があります。これらの実行ファイルには、脆弱性スキャナーなどで依存 crate の名前とバージョンを確認できるよう、[`cargo-auditable`](https://github.com/rust-secure-code/cargo-auditable) で依存関係情報を埋め込む予定です。また、配布アーカイブには GitHub Actions のビルド来歴証明を付与する予定です。これは実行ファイルの安全性を保証するものではありません。Linux版は Ubuntu 22.04 でビルドし、glibc 2.35 以降が必要です。Release に実行ファイルが添付されている場合は、利用環境に合うアーカイブを選び、付属の SHA-256 ファイルで検証してください。来歴証明は GitHub CLI で次のように検証できます。
 
@@ -30,7 +30,7 @@ gh attestation verify <archive-path> --repo tresuke/remove-except --signer-workf
 
 ## クイックスタート
 
-書式は `remove-except [OPTIONS] [KEEP_PATTERN]...` です。保持パターンは位置引数で1個以上指定します。`--patterns-from-stdin` を付けた場合は標準入力からも読み込み、合わせて1個以上あれば実行できます。複数指定した場合はいずれかに一致した項目を保持します。
+コマンド書式は `remove-except [OPTIONS] [KEEP_PATTERN]...` です。位置引数には保持するパスまたはglobパターンを指定します。`--patterns-from-stdin` を使う場合は標準入力のパターンと合わせて1個以上指定し、複数のパターンはOR条件で扱います。
 
 まず `--dry-run` で、保持される項目と削除対象を確認します。
 
@@ -38,14 +38,14 @@ gh attestation verify <archive-path> --repo tresuke/remove-except --signer-workf
 remove-except --dry-run keep.txt keep '**/*.md'
 ```
 
-削除を実行するときは `--dry-run` を外します。通常実行では保持項目と削除対象を表示した後、削除を続けるか尋ねます。`y` または `yes` を入力して Enter を押すと削除し、`n`、Enter のみ、その他の入力では中止します（既定は「いいえ」です）。`--force` を指定すると確認なしで削除しますが、無効なパターンや処理対象ディレクトリーを指定した場合はエラーになります。
+削除を実行するときは `--dry-run` を外します。通常実行では保持項目と削除対象を表示してから確認を求めます。確認入力の規則は「表示と実行」を参照してください。`--force` を指定すると確認なしで削除しますが、無効なパターンや処理対象ディレクトリーを指定した場合はエラーになります。
 
 ```sh
 remove-except keep.txt keep '**/*.md'
 remove-except --force keep.txt keep '**/*.md'
 ```
 
-コマンドを起動したディレクトリー以外を対象にする場合は、`--root` で対象ディレクトリーを指定します。相対パスはコマンド起動時のカレントディレクトリー基準で解決します。
+別の処理対象ディレクトリーは `--root` で指定します。相対パスはコマンド起動時のカレントディレクトリー基準です。
 
 ```sh
 remove-except --root work --dry-run keep.txt '**/*.md'
@@ -61,11 +61,13 @@ remove-except --root work --dry-run keep.txt '**/*.md'
 | `-f`, `--force` | 確認プロンプトを省略して削除します。パターンや処理対象の検証は省略しません。 |
 | `--patterns-from-stdin` | 標準入力から保持パターンを1行に1個ずつ読み込みます。位置引数のパターンとOR条件で組み合わせます。 |
 | `--format <FORMAT>` | 計画の出力形式。`human`（既定）または `json` を指定します。 |
-| `--layout <LAYOUT>` | 表示形式。`tree`（既定）または `flat` を指定します。`--format json` とは併用できません。 |
-| `--sort-by-type` | Flat表示専用。Directory、File、Symlinkの順に並べます。`--format json` とは併用できません。 |
-| `--summary <SECTION>` | `keep`、`delete`、`both` のいずれかを件数表示にします。対象セクションのパスは表示されません。`--format json` とは併用できません。 |
+| `--layout <LAYOUT>` | 表示形式。`tree`（既定）または `flat` を指定します。 |
+| `--sort-by-type` | Flat表示専用。Directory、File、Symlinkの順に並べます。 |
+| `--summary <SECTION>` | `keep`、`delete`、`both` のいずれかを件数表示にします。対象セクションのパスは表示されません。 |
 | `-h`, `--help` | ヘルプを表示します。 |
 | `-V`, `--version` | バージョンを表示します。 |
+
+`--summary`、`--layout`、`--sort-by-type` は人向け表示（`--format human`）専用で、`--format json` とは併用できません。
 
 ## パターンと処理ルール
 
@@ -97,7 +99,7 @@ work/
 remove-except --dry-run '**/*.md'
 ```
 
-この構成では `readme.md` が保持され、`keep.txt`、`todo.txt`、`reports`、`archive` などは削除対象として表示されます。プレビューには保持対象と削除対象の両方が表示されます。`**/` は0階層以上のディレクトリーに一致するため、`**/*.md` は直下と下位ディレクトリーの両方にある `.md` で終わるパスに一致します。
+この構成では `readme.md` が保持され、`keep.txt`、`todo.txt`、`reports`、`archive` などは削除対象として表示されます。プレビューには保持対象と削除対象の両方が表示されます。
 
 よく使う glob 記号は次のとおりです。
 
@@ -114,7 +116,7 @@ remove-except --dry-run '**/*.md'
 remove-except --dry-run 'reports/**/*.csv'
 ```
 
-この構成では `reports/report1.csv`、`reports/report2.csv`、`reports/2025/annual.csv` が保持されます。`**/` は0階層以上のディレクトリーに一致するため、`reports/**/*.csv` は `reports` 直下と下位階層の両方で `.csv` で終わるパスに一致します。glob は引用符で囲んで、シェルによる事前展開を防いでください。
+この構成では `reports/report1.csv`、`reports/report2.csv`、`reports/2025/annual.csv` が保持されます。glob は引用符で囲んで、シェルによる事前展開を防いでください。
 
 ### サブディレクトリーの指定
 
@@ -142,8 +144,6 @@ remove-except --dry-run 'reports/2025/*.csv'
 
 この構成では `reports/2025/annual.csv` が保持され、`reports/2025/notes.txt` は削除対象です。`*` はその階層だけに一致するため、`reports/2025/*.csv` は `reports/2025` 直下の `.csv` で終わるパスに一致します。配下の複数階層を対象にする場合は `reports/2025/**/*.csv` を使います。ディレクトリー全体を残す場合は、globではなく `reports/2025` のように指定します。
 
-どの例も `--dry-run` で保持対象と削除対象の一覧を確認できます。実際に削除するときだけ `--dry-run` を外してください。通常実行では両方の一覧を表示した後、削除を続けるかどうかを尋ねます。既定の回答は「いいえ」です。
-
 ### 処理対象とパス
 
 既定では、コマンド起動時のカレントディレクトリー以下を再帰的に処理します。`--root` で別の処理対象ディレクトリーを指定できます。指定したディレクトリー自体は一覧にも削除対象にも含まれません。ファイルシステム最上位のディレクトリーは処理対象にできません。
@@ -158,7 +158,7 @@ remove-except --dry-run 'reports/2025/*.csv'
 
 ### globと項目の保持
 
-`*`、`**`、`?`、文字クラス `[]`、選択肢 `{a,b}` を利用できます。`*` と `?` は `/` をまたがず、`**` は複数階層に一致します。`**/` は0階層以上のディレクトリーに一致します。`{2024,2025}` はいずれかの文字列に一致します。ファイル、ディレクトリー、シンボリックリンクが照合対象です。シェルによる事前展開を避けるため、globは引用符で囲んでください。
+パターンには `*`、`**`、`?`、文字クラス `[]`、選択肢 `{a,b}` を使えます。ファイル、ディレクトリー、シンボリックリンクが照合対象です。`*`、`**`、`?`、文字クラスの例と階層の規則は前の例を参照してください。選択肢と照合後の保持規則はこの節の後半を参照してください。
 
 一致した項目とその親ディレクトリーは保持しますが、一致した項目の子孫までは自動で保持しません。globを含まないディレクトリーパスを指定すると、そのディレクトリー全体を保持します。`dir/*` は `dir` 直下の項目だけに一致し、子ディレクトリーの中身は保持しません。`.` または `./` は処理対象ディレクトリーを表し、その配下をすべて保持します。
 
@@ -176,11 +176,9 @@ Windowsではツール独自のUnicode単純ケースフォールド（非トル
 
 ### 表示と実行
 
-Tree表示は保持項目と削除対象をツリーで示します。Flat表示は `ItemType` と `RelativePath` の一覧です。パターンに一致した項目と必要な祖先は、削除対象とは別に表示します。表示の色や記号は「出力とオプション」を参照してください。既定の並び順は相対パス順です。`--sort-by-type` はFlat表示でのみ使え、Directory → File → Symlinkの順に並べます。種類内は相対パス順です。並べ替えは表示だけに適用され、削除順は変わりません。
+Tree表示は保持項目と削除対象をツリーで示し、Flat表示は `ItemType` と `RelativePath` の一覧を示します。パターンに一致した項目と必要な祖先は、削除対象とは別に表示します。色、記号、並び順は「出力とオプション」を参照してください。
 
-通常実行では保持項目と削除対象を表示した後に確認します。回答は1行単位で読み取り、`y` または `yes`（大文字と小文字は区別せず、前後の空白は無視）で削除します。`n`、Enterのみ、その他の入力、入力の終了（EOF）では中止します。中止した場合は終了コード3で終了します。`--force` は確認なしで削除しますが、無効なパターンや処理対象ディレクトリーはエラーになります。指定した保持パターンのどれにも項目が一致しない場合は警告を出し、処理対象ディレクトリー配下の全項目が削除対象になります。
-
-既定の `human` 形式では、保持項目と削除対象、実行結果は標準出力に、警告・エラー・確認プロンプトは標準エラーに出力します。`--format json` では計画のJSONだけを標準出力に出し、実行結果のメッセージも標準エラーに出します。`human` 形式の標準出力は人向けの表示で、形式は将来変わる場合があります。別プログラムで解析する場合は `--format json` を使ってください。
+通常実行では保持項目と削除対象を表示した後に確認します。ただし、`--summary` で指定した節はパス一覧の代わりに件数を表示します。回答は1行単位で読み取り、`y` または `yes`（大文字と小文字は区別せず、前後の空白は無視）で削除します。`n`、Enterのみ、その他の入力、入力の終了（EOF）では中止します。既定は「いいえ」で、中止時は終了コード3です。`--force` は確認だけを省略し、無効なパターンや処理対象ディレクトリーの検証は省略しません。指定した保持パターンのどれにも項目が一致しない場合は警告を出し、処理対象ディレクトリー配下の全項目が削除対象になります。
 
 ## 出力とオプション
 
@@ -204,8 +202,6 @@ Root: S:\work\project
 
 削除一覧の各項目は削除対象です。最上位の削除項目を区別する印は使いません。Flat表示では保持済み親の色や印はありません。`--sort-by-type` はFlat表示でのみ使え、Directory → File → Symlink の順に並べ、各種類内は相対パス順です。型別ソートを使わない場合は相対パス順です。ソートは表示だけに適用され、対象一覧や削除順を変えません。
 
-凡例はパスを表示する一覧がある場合だけ、処理対象ディレクトリーの表示直後に表示します。色ありではTreeにディレクトリーの青、シンボリックリンクのシアン、保持済み親の緑を、Flatにディレクトリーの青とシンボリックリンクのシアンを示します。色なしではTreeに `/`、`@`、`+` の意味を、Flatに `/` と `@` の意味を説明します。
-
 レイアウトやサマリーを指定する例:
 
 ```sh
@@ -216,21 +212,23 @@ remove-except --dry-run --summary both keep.txt
 
 ### 凡例とサマリー
 
+パスを表示する一覧がある場合だけ、処理対象ディレクトリーの直後に凡例を表示します。色ありではTreeにディレクトリー（青）、シンボリックリンク（シアン）、保持済み親（緑）を、Flatにディレクトリー（青）とシンボリックリンク（シアン）を示します。色なしではTreeに `/`、`@`、`+` の意味を、Flatに `/` と `@` の意味を説明します。
+
 TTY上の `--help` は見出し、Usage、オプション名、値を控えめに装飾します。色が無効な場合はANSI装飾を出しません。
 
 `--summary keep|delete|both` は選択したセクションをパスなしの件数表示にします。保持件数には必要な祖先を含み、直接一致数は別に示します。削除項目数と、実際に削除関数へ渡す最上位項目数も区別します。サマリーではパスを確認できないため、削除前には必ず `--summary` なしの `--dry-run` で全件を確認してください。
 
-`human` 形式では、保持項目と削除対象、および実行結果は標準出力、警告・エラー・確認プロンプトは標準エラーに出力します（`--format json` の出力先は「JSON出力」を参照）。`human` 形式の標準出力（色、凡例、Tree/Flat表示、サマリーを含む）を別プログラムで解析する用途はサポート対象ではありません。
+`human` 形式では、保持項目と削除対象、および実行結果は標準出力、警告・エラー・確認プロンプトは標準エラーに出力します（`--format json` の出力先は「JSON出力」を参照）。`human` 形式の標準出力は人向けで、別プログラムから解析する安定した形式ではありません。
 
 ## パイプラインとの連携
 
-`--patterns-from-stdin` と `--format json` を使うと、PowerShellやBashで他のコマンドと組み合わせられます。標準入力でパターンを渡す方向と、JSONで計画を受け取る方向は、それぞれ単独でも同時にも使えます。これらの機能は `v0.2.4` には含まれていません（「インストール」を参照）。
+`--patterns-from-stdin` と `--format json` を使うと、PowerShellやBashで他のコマンドと組み合わせられます。標準入力でパターンを渡す方向と、JSONで計画を受け取る方向は、それぞれ単独でも同時にも使えます。
 
 ### 標準入力からのパターン
 
 `--patterns-from-stdin` を指定すると、標準入力を1行1パターンとして読み込みます。
 
-- 文字コードはUTF-8です。UTF-8として不正な行や、NUL文字を含む行があると、行番号を示してエラー終了します（終了コード2）。BOMのないUTF-16入力もNUL文字を含むため、このエラーになります。入力の先頭にあるBOMは1個だけ取り除きます。
+- 入力はUTF-8にしてください。UTF-8として不正な行やNUL文字を含む行があると、行番号を示してエラー終了します（終了コード2）。BOMのないUTF-16を判定するものではありません。UTF-16のバイト列にNUL文字が含まれない場合、別のUTF-8文字列として解釈されることがあります。入力の先頭にあるBOMは1個だけ取り除きます。
 - 改行はLFとCRLFのどちらも使えます。行末の改行文字だけを取り除き、それ以外の空白は名前の一部として残します。改行のない最終行の末尾にあるCRも残します。
 - 完全に空の行は無視します。空白だけの行は空白のパターンとして扱います。
 - `#` などのコメント構文はありません。
@@ -257,7 +255,7 @@ PowerShellの例（一覧ファイルに書いたパターンと `*.md` を残�
 Get-Content -Encoding UTF8 .\keep-list.txt | remove-except --dry-run --patterns-from-stdin '*.md'
 ```
 
-Windowsでは、PowerShellが外部コマンドとの間で文字列を受け渡すときのエンコーディングがUTF-8とは限りません。外部コマンドへ渡す文字列は `$OutputEncoding`、外部コマンドの出力の読み取りは `[Console]::OutputEncoding` に従います。Windows PowerShell 5.1では `$OutputEncoding` の既定値がUTF-8ではありません。PowerShell 7以降でも、`[Console]::OutputEncoding` は既定でコンソールのコードページ（日本語版Windowsでは Shift_JIS など）です。ASCII以外の文字を含むパターンやパスを扱う場合は、PowerShellのバージョンにかかわらず、事前に次を実行してください。
+PowerShellからパターンを渡したり、JSON出力を読み取ったりする場合は、文字列の受け渡しにUTF-8を使ってください。Windows PowerShell 5.1では、外部コマンドへ文字列を送る `$OutputEncoding` の既定値はASCIIです。PowerShell 7以降では既定でUTF-8ですが、設定が変更されている場合もあります。以下は、パターンの送信とJSON出力の読み取りをUTF-8に揃える設定例です。既にUTF-8なら変更は不要です。
 
 ```powershell
 $utf8 = [System.Text.UTF8Encoding]::new($false)
@@ -265,7 +263,7 @@ $OutputEncoding = $utf8
 [Console]::OutputEncoding = $utf8
 ```
 
-`git ls-files` などの外部コマンドの出力を `remove-except` へ渡す場合と、JSON出力を受け取る場合は、両方の設定が必要です。
+`$OutputEncoding` はPowerShellの文字列を外部コマンドへ送る際の設定、`[Console]::OutputEncoding` は外部コマンドの出力をPowerShellで文字列として読み取る際の設定です。
 
 ### JSON出力
 
@@ -323,7 +321,7 @@ $plan = remove-except --dry-run --format json '**/*.md' | ConvertFrom-Json
 $plan.delete_items | Where-Object type -eq 'file' | ForEach-Object relative_path
 ```
 
-Windowsでは、PowerShell 7以降でもASCII以外の文字を含むパスを正しく受け取るには `[Console]::OutputEncoding` の設定が必要です。「標準入力からのパターン」のPowerShellのエンコーディング設定を参照してください。
+PowerShellでJSONを読み取る場合も、UTF-8として受け取る設定を確認してください。設定例は「標準入力からのパターン」を参照してください。
 
 ### 終了コード
 
@@ -338,150 +336,14 @@ Windowsでは、PowerShell 7以降でもASCII以外の文字を含むパスを�
 
 ## バージョンと互換性
 
-0.x 系では、不具合修正は Patch、機能追加・CLI または公開ライブラリー API の互換性を壊す変更・最低 Rust バージョン（MSRV）の引き上げは Minor としてリリースします。互換性を壊す変更が Minor 更新に含まれる場合があります。
-
-保持対象・削除対象や確認手順に影響する変更は、リリースノートに明記します。Patch 更新でも、不具合修正によって削除結果が変わる場合があります。更新時は変更内容を確認し、実行前に `--dry-run` で対象を確認してください。
+更新によって保持対象・削除対象や確認手順が変わる場合があります。Patch 更新でも、不具合修正によって削除結果が変わることがあります。更新時は変更内容を確認し、実行前に `--dry-run` で対象を確認してください。
 
 ## ライセンス
 
 このプロジェクトはデュアルライセンスです。利用者は `LICENSE-MIT` または `LICENSE-APACHE` のいずれかを選択できます。依存ライブラリーにはそれぞれ独自のライセンスが適用されます。
 
-## 開発者向け仕様
+## 開発者向け情報
 
-### 構成
+開発手順は[開発ガイド（日本語）](https://github.com/tresuke/remove-except/blob/main/DEVELOPMENT.ja.md)を参照してください。[English](https://github.com/tresuke/remove-except/blob/main/DEVELOPMENT.md)。
 
-- `src/main.rs`: CLI 引数の解析、標準入力からのパターン読み込み、保持項目と削除対象の作成・表示（人向け表示とJSON）、確認、実ファイル削除、終了コードの決定を担当します。
-- `src/lib.rs`: crate rootの公開再エクスポートと`build_plan`による走査・`RemovalPlan` 作成の調整を担当します。
-- `src/model.rs`: 公開データ型と読み取りgetterを定義します。`src/pattern.rs` はglob照合、`src/path.rs` はパス検証と正規化、`src/error.rs` は入力検証エラー `ValidationError` を担当します。
-- `tests/cli.rs`: CLIを一時ディレクトリー上で実行し、削除・確認・表示、標準入力からのパターン、JSON出力、終了コードを検証します。`tests/library.rs` は公開ライブラリAPIとOS別ケース照合を検証します。色付き・色なしの描画はバイナリの単体テストで検証します。
-
-### ソースから実行
-
-開発中はリポジトリー直下から `cargo run --` を付けて実行できます。
-
-```sh
-cargo run -- --dry-run keep.txt keep '**/*.md'
-```
-
-### 手動テスト
-
-`Prepare-Manual-Test.ps1` は、Rust CLI の手動確認用に `manual-test-workspace` と fixture ファイルを作成します。`keep-link` は `keep.txt` を指すシンボリックリンクで、プレビューの `@` 凡例を確認するためのfixtureです。Windowsではシンボリックリンク作成に Developer Mode の有効化または管理者権限が必要な場合があります。リポジトリー直下で実行します。
-
-```powershell
-.\Prepare-Manual-Test.ps1
-Set-Location .\manual-test-workspace
-cargo run --manifest-path ..\Cargo.toml -- --dry-run keep.txt keep '*.md'
-```
-
-一覧では保持対象として `keep.txt`、`release-notes.md`、`keep` ディレクトリーとその配下が表示され、それ以外は削除候補として表示されます。実際の削除を試す場合は `--dry-run` を外して実行し、プロンプトには `n` と回答すれば削除を中止できます。削除を実行した後は `Set-Location ..` でリポジトリー直下に戻り、スクリプトを再実行して既知の fixture を復元します。
-
-Ubuntu（WSLを含む）では `prepare-manual-test.sh` で同じfixtureを作成できます。WSLでは `/mnt/...` ではなくLinuxホーム配下のリポジトリーコピーで作業してください。そのコピーのリポジトリー直下から次を実行します。Cargoが `PATH` に含まれていることも確認してください。
-
-```bash
-bash ./prepare-manual-test.sh
-cd manual-test-workspace
-cargo run --manifest-path ../Cargo.toml -- --dry-run keep.txt keep '*.md'
-```
-
-確認プロンプトで中止する場合は `--dry-run` を外して実行し、`n` と回答します。実際に削除した後は `cd ..` でリポジトリー直下へ戻り、準備スクリプトを再実行してください。
-
-両スクリプトは既知のfixtureファイルを上書き・作成し、`keep-link` が `keep.txt` を指す既知のシンボリックリンクである場合だけ張り直します。ディレクトリー内のその他のファイルや別リンクは削除しません。別の場所に作成する場合は、PowerShellでは `-Path`、Bashでは省略可能な出力先の位置引数を指定します。`keep-link` に競合する通常ファイルや別リンクが存在する場合は、上書きせずエラーになります。
-
-```powershell
-.\Prepare-Manual-Test.ps1 -Path 'C:\work\manual-fixtures'
-```
-
-```bash
-bash ./prepare-manual-test.sh "$HOME/manual-fixtures"
-```
-
-任意の出力先に作成したfixtureディレクトリーからCargoを実行する場合は、`--manifest-path` にリポジトリの `Cargo.toml` の絶対パスを指定してください。
-
-### ライブラリ API
-
-ライブラリの `build_plan(root, patterns)` は、指定した処理対象ディレクトリーと保持パターンから `RemovalPlan` を生成します。保持パターン未指定または空のパターン、無効なglob、処理対象ディレクトリー外の絶対パターン、親ディレクトリーへの移動、ファイルシステム最上位のディレクトリーまたはディレクトリー以外を処理対象に指定した場合、Windowsのdrive-relative pathを指定した場合はエラーを返します。処理対象ディレクトリーを解決できない場合もエラーになります。これらの入力検証エラーは `anyhow::Error::downcast_ref::<ValidationError>()` で判別でき、エラーメッセージの文字列に依存せずに扱えます。走査中のファイルシステムエラーは `ValidationError` ではありません。`.` と `./` は処理対象ディレクトリーを表し、その配下全体を保持します。
-
-`RemovalPlan` と `PlannedItem` のデータは getter 経由で読み取ります。getter は参照を返すため、`RemovalPlan` の内容を変更できません。公開フィールドを直接参照していたコードは getter 呼び出しへ移行してください。
-
-```rust,no_run
-use remove_except::build_plan;
-use std::path::Path;
-
-let patterns = ["Cargo.toml".to_owned(), "src/**".to_owned()];
-let plan = build_plan(Path::new("."), &patterns).expect("valid plan");
-
-for item in plan.delete_roots() {
-    println!("{}", item.relative_path());
-}
-```
-
-`RemovalPlan` の getter:
-
-- `root()`: 正規化された処理対象ディレクトリー。
-- `direct_match_count()`: パターンに直接一致した項目数。一致なしの警告判定に使います。
-- `keep_items()`: 保持対象となる項目すべて。祖先ディレクトリーを含み、相対パス順に並びます。
-- `delete_items()`: 削除対象となる項目すべて。相対パス順に並びます。
-- `delete_roots()`: 実削除に渡す最上位の削除項目。削除対象ディレクトリーの子孫は含めず、再帰削除の重複を避けます。
-
-各 `PlannedItem` は `path()`、`relative_path()`、`item_type()` で読み取れます。相対パスは `/` 区切りです。`path()` は正規化された処理対象ディレクトリー配下の絶対パスを返します。Windowsでは標準ライブラリのcanonicalize表現により `\\?\` の拡張パスprefixが含まれる場合があります。
-
-走査時はシンボリックリンクをたどりません。`RemovalPlan` の生成後は CLI 側が `delete_roots` の項目を削除します。削除中にファイルシステムエラーが起きた場合はエラー終了しますが、それ以前に削除済みの項目は元に戻りません。
-
-### ビルドと検証
-
-Edition 2024 を使用し、MSRV は Rust 1.88 です。標準の検証環境は GitHub Actions で、Windows と Ubuntu の Rust 1.88 および stable toolchain を使い、`cargo fmt --check`、`cargo test`、`cargo clippy --all-targets -- -D warnings` を実行します。ローカルでも同じコマンドを実行できます。
-
-MSRV は現在のロック済み依存クレートが宣言する最低 Rust バージョンの最大値に基づきます。Edition 2024 の要件だけから決めた値ではありません。依存更新やコード変更で新しいコンパイラーが必要になった場合は、`Cargo.toml`、CI の toolchain、両 README の MSRV を同じ変更内で見直します。CI では `--locked` を付け、ロックファイルの依存バージョンでテストと Clippy を実行します。
-
-```sh
-cargo fmt --check
-cargo test
-cargo clippy --all-targets -- -D warnings
-cargo build --release
-cargo doc --no-deps
-```
-
-UbuntuまたはWSLで追加検証する場合は、リポジトリーをLinuxホームディレクトリー配下に用意し、その中で必要なコマンドを実行してください。WSLの `/mnt/...` 上の作業コピーではなく、Linux側の作業コピーを使います。
-
-### リリースの準備
-
-公開済みの `v0.2.4` はソースコードのみのリリースで、変更しません。今後のバージョンをリリースする場合は、`Cargo.toml` と `Cargo.lock` のルートパッケージバージョンをPRで更新し、必須チェック成功後にマージして、更新後の `main` のCIも確認します。リリース内容を承認した後、新しいバージョンタグを作成してpushします。例:
-
-```sh
-git tag -a vX.Y.Z -m "remove-except vX.Y.Z"
-git push origin vX.Y.Z
-```
-
-手動起動の **Prepare Release** workflow は、バージョンタグを実行対象として選択します（GitHub CLI では `gh workflow run prepare-release.yml --ref vX.Y.Z`）。タグが `main` 上にあり、パッケージバージョンと一致することを確認してください。タグを実行対象にすることで、来歴証明が実際にビルドしたタグのコミットを示します。workflow は Windows x64 と Linux x64 の実行ファイルをテストし、`cargo audit` でロックファイルとビルド後の実行ファイルを検査します。バージョンを固定した `cargo-auditable` で依存関係情報を埋め込んでビルドした後、実行ファイル、両 README、ライセンスをアーカイブにまとめ、SHA-256 checksum と GitHub Actions の来歴証明を生成し、GitHub Release のドラフトを作成または更新します。埋め込まれる情報は依存 crate の名前とバージョンであり、脆弱性検査やサプライチェーン攻撃の防御を代替するものではありません。Linux版は保守中のrunner上の Ubuntu 22.04 コンテナーでビルドし、glibc 2.35 以降を必要とします。タグのpushだけではReleaseは公開されません。ドラフトの対象コミット、生成されたリリースノート、アーカイブ、checksum、来歴証明を確認してから、GitHub上で手動公開します。
-
-crates.io 配布の準備では、Cargo package の収録内容を確認します。
-
-```sh
-cargo package --list --locked
-cargo package --locked
-cargo publish --dry-run --locked
-```
-
-manifestの許可リストにより、リポジトリー専用指示、テスト、手動fixture、開発用ユーティリティはpackageから除外されます。dry-runが成功してもcrateは公開されません。crates.ioへの公開は、明示的に承認された後でmaintainerがローカル認証情報を使って手動で行います。crates.io tokenをリポジトリーやRelease workflowへ追加しないでください。
-
-### パフォーマンス計測
-
-`build_plan` のベンチマークでは、標準ライブラリと既存の開発依存関係だけを使い、一時fixtureを作成してから処理時間を計測します。fixture作成時間は計測に含めません。2,080項目の広い構成で単一glob・複数glob・リテラルディレクトリー・全項目保持を、8,208項目の構成で疎一致・全項目保持を、さらに深い構成での一致を比較します。
-
-```sh
-cargo bench --bench plan_generation
-cargo bench --bench plan_generation -- --samples 25 --iterations 10
-```
-
-各ケースの中央値、サンプル範囲、走査項目数、パターン数、概算項目/秒を表示します。既定値の9サンプル×3反復は短時間の確認用です。性能比較では同じOS・同じマシン・同じ引数で25サンプル×10反復を実行し、ビルド完了後のRelease相当ベンチマーク結果を記録してください。
-
-CLI全体を計測する場合は、`hyperfine` でReleaseバイナリをdry-runします。次の例は手動fixtureを読むだけで、削除しません。
-
-```powershell
-cargo build --release
-hyperfine --warmup 3 --runs 10 'target/release/remove-except.exe --dry-run --summary both --root manual-test-workspace keep.txt keep'
-```
-
-CLI計測にはプロセス起動、`build_plan` の処理、表示が含まれます。`build_plan` のみの計測と混同せず、fixtureの内容を比較間で同じにしてください。
-
-依存ライブラリは `Cargo.toml` で管理します。CLI は `clap`、出力装飾は `console`、JSON出力は `serde` と `serde_json`、glob 照合は `globset`、ディレクトリー走査は `walkdir`、エラー文脈の付与は `anyhow` を利用します。Windows向けUnicode glob照合では `regex-automata` と `unicode-casefold` を利用しています。
+公開ライブラリー API の docs.rs での公開は将来の予定であり、現時点では公開していません。
