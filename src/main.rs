@@ -1,15 +1,22 @@
 //! Displays a keep/deletion plan beneath the current directory and deletes items after confirmation.
 
+use std::fmt;
 use std::fs;
-use std::io::{self, BufWriter, IsTerminal, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::builder::styling::{AnsiColor, Styles};
 use clap::{CommandFactory, Parser, ValueEnum};
 use console::style;
-use dialoguer::Confirm;
-use remove_except::{ItemType, PlannedItem, build_plan};
+use remove_except::{ItemType, PlannedItem, RemovalPlan, ValidationError, build_plan};
+use serde::Serialize;
+
+const EXIT_RUNTIME_ERROR: u8 = 1;
+const EXIT_INVALID_INPUT: u8 = 2;
+const EXIT_NOT_EXECUTED: u8 = 3;
+const JSON_SCHEMA_VERSION: u32 = 1;
 
 const HELP_STYLES: Styles = Styles::styled()
     .header(AnsiColor::Cyan.on_default().bold())
@@ -22,7 +29,7 @@ const HELP_STYLES: Styles = Styles::styled()
     version,
     about = "Keep matching items and remove the rest under a processing root",
     long_about = "Keep items matching one or more paths or glob patterns and remove the rest under the selected root. Multiple patterns are combined with OR. Always review the plan before deleting items.",
-    after_long_help = "Output:\n  Tree: directories end with / and symlinks with @. With color, directories are blue, symlinks cyan, and kept parent directories in the delete tree green. Without color, kept parents end with +.\n  Flat: ItemType identifies each entry. Without color, directory and symlink paths end with / and @. Flat output has no kept-parent marker.\n  Status labels: NO REMOVALS (green) when there are no deletion operations; otherwise PREVIEW ONLY (cyan) for dry runs, CONFIRM TO DELETE (yellow) when confirmation is required, FORCE DELETE (red) with --force.\n  Colors are used automatically when output is a terminal and color is available.",
+    after_long_help = "Output:\n  Tree: directories end with / and symlinks with @. With color, directories are blue, symlinks cyan, and kept parent directories in the delete tree green. Without color, kept parents end with +.\n  Flat: ItemType identifies each entry. Without color, directory and symlink paths end with / and @. Flat output has no kept-parent marker.\n  Status labels: NO REMOVALS (green) when there are no deletion operations; otherwise PREVIEW ONLY (cyan) for dry runs, CONFIRM TO DELETE (yellow) when confirmation is required, FORCE DELETE (red) with --force.\n  Colors are used automatically when output is a terminal and color is available.\n\nPipelines:\n  --patterns-from-stdin reads one UTF-8 pattern per line (LF or CRLF). A leading BOM is removed, empty lines are ignored, other whitespace is kept, and # has no special meaning. Invalid UTF-8 or NUL characters (for example, UTF-16 input) are rejected. Confirmation is then read from the terminal; without one, nothing is deleted.\n  --format json writes exactly one JSON object (schema_version 1) with root, direct_match_count, keep_items, delete_items, and delete_roots to stdout. Messages and prompts go to stderr. New fields may be added without changing schema_version.\n\nExit codes:\n  0 plan shown or deletion completed; 1 runtime error; 2 invalid arguments, input, root, or patterns; 3 nothing deleted because confirmation was declined or unavailable.",
     styles = HELP_STYLES
 )]
 struct Args {
@@ -45,6 +52,21 @@ struct Args {
 
     #[arg(
         long,
+        help = "Also read keep patterns from standard input, one per line"
+    )]
+    patterns_from_stdin: bool,
+
+    #[arg(
+        long,
+        value_enum,
+        value_name = "FORMAT",
+        default_value = "human",
+        help = "Plan output format: human or json"
+    )]
+    format: OutputFormat,
+
+    #[arg(
+        long,
         value_enum,
         value_name = "SECTION",
         help = "Summarize paths in SECTION: keep, delete, or both"
@@ -55,10 +77,9 @@ struct Args {
         long,
         value_enum,
         value_name = "LAYOUT",
-        default_value = "tree",
-        help = "Display paths as a tree or a flat list"
+        help = "Display paths as a tree or a flat list [default: tree]"
     )]
-    layout: Layout,
+    layout: Option<Layout>,
 
     #[arg(
         long,
@@ -67,12 +88,18 @@ struct Args {
     sort_by_type: bool,
 
     #[arg(
-        required = true,
+        required_unless_present = "patterns_from_stdin",
         num_args = 1..,
         value_name = "KEEP_PATTERN",
         help = "Paths or glob patterns to keep (* matches one level, ** recurses); any match keeps an item"
     )]
     patterns: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum OutputFormat {
+    Human,
+    Json,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -96,9 +123,61 @@ struct PlanDisplayOptions {
     colors_enabled: bool,
 }
 
-fn main() -> Result<()> {
+/// Result of a run that did not fail.
+#[derive(Debug, Eq, PartialEq)]
+enum Outcome {
+    /// The plan was shown, or deletion completed.
+    Completed,
+    /// Nothing was deleted because confirmation was declined or unavailable.
+    NotExecuted,
+}
+
+/// Invalid command-line input detected by the CLI itself rather than by the library.
+#[derive(Debug)]
+struct InputError(String);
+
+impl fmt::Display for InputError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for InputError {}
+
+fn main() -> ExitCode {
     let args = Args::parse();
-    if args.sort_by_type && args.layout != Layout::Flat {
+    validate_option_combinations(&args);
+
+    match run(args) {
+        Ok(Outcome::Completed) => ExitCode::SUCCESS,
+        Ok(Outcome::NotExecuted) => ExitCode::from(EXIT_NOT_EXECUTED),
+        Err(error) => {
+            eprintln!("Error: {error:?}");
+            ExitCode::from(exit_code_for_error(&error))
+        }
+    }
+}
+
+fn validate_option_combinations(args: &Args) {
+    let conflict = if args.format == OutputFormat::Json {
+        if args.summary.is_some() {
+            Some("--format json cannot be used with --summary; JSON always contains the full plan")
+        } else if args.layout.is_some() {
+            Some("--format json cannot be used with --layout")
+        } else if args.sort_by_type {
+            Some("--format json cannot be used with --sort-by-type")
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(message) = conflict {
+        Args::command()
+            .error(clap::error::ErrorKind::ArgumentConflict, message)
+            .exit();
+    }
+    if args.sort_by_type && args.layout != Some(Layout::Flat) {
         Args::command()
             .error(
                 clap::error::ErrorKind::MissingRequiredArgument,
@@ -106,9 +185,44 @@ fn main() -> Result<()> {
             )
             .exit();
     }
+}
+
+fn exit_code_for_error(error: &anyhow::Error) -> u8 {
+    if error.downcast_ref::<ValidationError>().is_some()
+        || error.downcast_ref::<InputError>().is_some()
+    {
+        EXIT_INVALID_INPUT
+    } else {
+        EXIT_RUNTIME_ERROR
+    }
+}
+
+fn run(args: Args) -> Result<Outcome> {
+    let json = args.format == OutputFormat::Json;
+    let mut patterns = args.patterns;
+    if args.patterns_from_stdin {
+        let stdin = io::stdin();
+        if stdin.is_terminal() {
+            let end_of_input = if cfg!(windows) {
+                "Ctrl+Z, then Enter"
+            } else {
+                "Ctrl+D"
+            };
+            eprintln!(
+                "Reading keep patterns from the terminal, one per line. Finish with {end_of_input}."
+            );
+        }
+        patterns.extend(read_patterns(stdin.lock())?);
+    }
     let current_dir = std::env::current_dir().context("Failed to get current directory")?;
     let root = resolve_root(&current_dir, args.root)?;
-    let plan = build_plan(&root, &args.patterns)?;
+    let plan = build_plan(&root, &patterns)?;
+    // Serialize before printing anything so an unrepresentable path never yields partial JSON.
+    let json_plan = if json {
+        Some(json_plan_text(&plan)?)
+    } else {
+        None
+    };
 
     if plan.direct_match_count() == 0 {
         eprintln!(
@@ -123,23 +237,45 @@ fn main() -> Result<()> {
         Some(SummarySection::Both) => (true, true),
         None => (false, false),
     };
-    print_plan(
-        &plan,
-        args.dry_run,
-        args.force,
-        keep_summary,
-        delete_summary,
-        args.layout == Layout::Flat,
-        args.sort_by_type,
-    )?;
-
-    if args.dry_run || plan.delete_roots().is_empty() {
-        return Ok(());
+    if let Some(json_plan) = json_plan {
+        let mut output = io::stdout().lock();
+        output.write_all(json_plan.as_bytes())?;
+        output.flush()?;
+    } else {
+        print_plan(
+            &plan,
+            args.dry_run,
+            args.force,
+            keep_summary,
+            delete_summary,
+            args.layout == Some(Layout::Flat),
+            args.sort_by_type,
+        )?;
     }
 
-    if !args.force && !confirm_deletion(keep_summary || delete_summary)? {
-        println!("Aborted.");
-        return Ok(());
+    if args.dry_run || plan.delete_roots().is_empty() {
+        return Ok(Outcome::Completed);
+    }
+
+    if !args.force {
+        let has_summaries = keep_summary || delete_summary;
+        let confirmed = if args.patterns_from_stdin {
+            match confirm_on_terminal(confirmation_prompt(has_summaries))? {
+                Some(confirmed) => confirmed,
+                None => {
+                    eprintln!(
+                        "No terminal is available to confirm deletion; nothing was removed. Use --dry-run to preview or --force to delete without confirmation."
+                    );
+                    return Ok(Outcome::NotExecuted);
+                }
+            }
+        } else {
+            confirm_deletion(has_summaries)?
+        };
+        if !confirmed {
+            report_status(json, "Aborted.");
+            return Ok(Outcome::NotExecuted);
+        }
     }
 
     for item in plan.delete_roots() {
@@ -151,8 +287,123 @@ fn main() -> Result<()> {
         })?;
     }
 
-    println!("Removal complete.");
-    Ok(())
+    report_status(json, "Removal complete.");
+    Ok(Outcome::Completed)
+}
+
+/// Writes a final status message, keeping stdout reserved for JSON in JSON mode.
+fn report_status(json: bool, message: &str) {
+    if json {
+        eprintln!("{message}");
+    } else {
+        println!("{message}");
+    }
+}
+
+/// Reads keep patterns, one per LF- or CRLF-terminated UTF-8 line.
+///
+/// A single leading byte-order mark is removed and completely empty lines are ignored.
+/// Whitespace and `#` are kept as literal pattern characters. Invalid UTF-8 and NUL
+/// characters, which typically indicate UTF-16 or binary input, are rejected.
+fn read_patterns(mut reader: impl Read) -> Result<Vec<String>> {
+    let mut bytes = Vec::new();
+    reader
+        .read_to_end(&mut bytes)
+        .context("Failed to read keep patterns from standard input")?;
+    let input = bytes
+        .strip_prefix(b"\xEF\xBB\xBF".as_slice())
+        .unwrap_or(&bytes);
+
+    let mut patterns = Vec::new();
+    let mut lines = input.split(|byte| *byte == b'\n').peekable();
+    let mut line_number = 0;
+    while let Some(line) = lines.next() {
+        line_number += 1;
+        // Only a carriage return that forms CRLF is a terminator; a final unterminated line keeps it.
+        let line = if lines.peek().is_some() {
+            line.strip_suffix(b"\r").unwrap_or(line)
+        } else {
+            line
+        };
+        let pattern = std::str::from_utf8(line).map_err(|_| {
+            InputError(format!(
+                "Standard input line {line_number} is not valid UTF-8"
+            ))
+        })?;
+        if pattern.contains('\0') {
+            return Err(InputError(format!(
+                "Standard input line {line_number} contains a NUL character; input must be UTF-8 text"
+            ))
+            .into());
+        }
+        if !pattern.is_empty() {
+            patterns.push(pattern.to_owned());
+        }
+    }
+    Ok(patterns)
+}
+
+#[derive(Serialize)]
+struct JsonPlan<'a> {
+    schema_version: u32,
+    root: &'a str,
+    direct_match_count: usize,
+    keep_items: Vec<JsonItem<'a>>,
+    delete_items: Vec<JsonItem<'a>>,
+    delete_roots: Vec<JsonItem<'a>>,
+}
+
+#[derive(Serialize)]
+struct JsonItem<'a> {
+    relative_path: &'a str,
+    #[serde(rename = "type")]
+    item_type: &'static str,
+}
+
+/// Serializes the complete plan, failing if any path cannot be represented as Unicode.
+fn json_plan_text(plan: &RemovalPlan) -> Result<String> {
+    let root = unicode_path(plan.root())?;
+    let json_plan = JsonPlan {
+        schema_version: JSON_SCHEMA_VERSION,
+        root,
+        direct_match_count: plan.direct_match_count(),
+        keep_items: json_items(plan.keep_items())?,
+        delete_items: json_items(plan.delete_items())?,
+        delete_roots: json_items(plan.delete_roots())?,
+    };
+    let mut text = serde_json::to_string_pretty(&json_plan).context("Failed to serialize plan")?;
+    text.push('\n');
+    Ok(text)
+}
+
+fn json_items(items: &[PlannedItem]) -> Result<Vec<JsonItem<'_>>> {
+    items
+        .iter()
+        .map(|item| {
+            unicode_path(item.path())?;
+            Ok(JsonItem {
+                relative_path: item.relative_path(),
+                item_type: json_item_type(item.item_type()),
+            })
+        })
+        .collect()
+}
+
+fn unicode_path(path: &Path) -> Result<&str> {
+    path.to_str().with_context(|| {
+        format!(
+            "Path cannot be represented as Unicode in JSON output; nothing was printed or removed: {}",
+            escape_control_characters(&path.to_string_lossy())
+        )
+    })
+}
+
+fn json_item_type(item_type: ItemType) -> &'static str {
+    match item_type {
+        ItemType::Directory => "directory",
+        ItemType::File => "file",
+        ItemType::Symlink => "symlink",
+    }
 }
 
 fn resolve_root(current_dir: &Path, root: Option<PathBuf>) -> Result<PathBuf> {
@@ -161,10 +412,11 @@ fn resolve_root(current_dir: &Path, root: Option<PathBuf>) -> Result<PathBuf> {
     };
 
     if is_drive_relative_path(&root) {
-        bail!(
+        return Err(InputError(format!(
             "Drive-relative root paths are not supported: {}",
             root.display()
-        );
+        ))
+        .into());
     }
 
     if root.is_absolute() {
@@ -237,32 +489,57 @@ fn is_plain_windows_display_path(path: &str) -> bool {
     })
 }
 
-fn confirm_deletion(has_summaries: bool) -> Result<bool> {
-    let prompt = if has_summaries {
+fn confirmation_prompt(has_summaries: bool) -> &'static str {
+    if has_summaries {
         "Delete the plan? Summary sections do not list item paths."
     } else {
         "Are you sure you want to delete the above items?"
-    };
-
-    if io::stdin().is_terminal() {
-        return Confirm::new()
-            .with_prompt(prompt)
-            .default(false)
-            .interact()
-            .context("Failed to read confirmation");
     }
+}
 
-    let stderr = io::stderr();
-    let mut prompt_output = stderr.lock();
+fn confirm_deletion(has_summaries: bool) -> Result<bool> {
+    let prompt = confirmation_prompt(has_summaries);
+    write_prompt(prompt)?;
+    read_confirmation(io::stdin().lock()).context("Failed to read confirmation")
+}
+
+fn write_prompt(prompt: &str) -> io::Result<()> {
+    let mut prompt_output = io::stderr().lock();
     write!(prompt_output, "{prompt} [y/N] ")?;
-    prompt_output.flush()?;
-    drop(prompt_output);
-    let mut answer = String::new();
-    io::stdin().read_line(&mut answer)?;
-    Ok(matches!(
-        answer.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
+    prompt_output.flush()
+}
+
+/// Reads one full answer line, so a partial `y` keypress never confirms on its own.
+///
+/// Input that is not valid UTF-8, such as a non-UTF-8 console code page, is decoded
+/// lossily; anything other than `y` or `yes` declines.
+fn read_confirmation(mut input: impl BufRead) -> io::Result<bool> {
+    let mut answer = Vec::new();
+    input.read_until(b'\n', &mut answer)?;
+    Ok(is_affirmative(&String::from_utf8_lossy(&answer)))
+}
+
+fn is_affirmative(answer: &str) -> bool {
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+/// Asks for confirmation on the controlling terminal instead of standard input.
+///
+/// Returns `Ok(None)` when no terminal can be opened, so the caller can stop without
+/// deleting anything. Failures after the terminal is open are returned as errors.
+fn confirm_on_terminal(prompt: &str) -> Result<Option<bool>> {
+    #[cfg(windows)]
+    const TERMINAL_INPUT: &str = "CONIN$";
+    #[cfg(not(windows))]
+    const TERMINAL_INPUT: &str = "/dev/tty";
+
+    let Ok(terminal) = fs::OpenOptions::new().read(true).open(TERMINAL_INPUT) else {
+        return Ok(None);
+    };
+    write_prompt(prompt)?;
+    let confirmed = read_confirmation(BufReader::new(terminal))
+        .context("Failed to read confirmation from the terminal")?;
+    Ok(Some(confirmed))
 }
 
 fn print_plan(
@@ -627,7 +904,10 @@ fn remove_file_or_directory_link(path: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, flat_item_type_rank, render_plan, style_flat_item, tree_item_suffix};
+    use super::{
+        Args, InputError, flat_item_type_rank, read_confirmation, read_patterns, render_plan,
+        style_flat_item, tree_item_suffix,
+    };
     use assert_fs::prelude::*;
     use clap::CommandFactory;
     use remove_except::{ItemType, build_plan};
@@ -636,6 +916,58 @@ mod tests {
 
     #[cfg(windows)]
     use super::display_root_path;
+
+    #[test]
+    // Verify only a whole `y` or `yes` line confirms; partial or other answers decline.
+    fn read_confirmation_requires_a_full_affirmative_line() {
+        for answer in ["y\n", "YES\r\n", " yes \n", "y"] {
+            assert!(read_confirmation(answer.as_bytes()).unwrap(), "{answer:?}");
+        }
+        for answer in ["", "\n", "n\n", "maybe\n", "yes please\n", "ye\n", "y es\n"] {
+            assert!(!read_confirmation(answer.as_bytes()).unwrap(), "{answer:?}");
+        }
+        assert!(!read_confirmation(b"\xff\xfe\n".as_slice()).unwrap());
+        assert!(!read_confirmation("n\ny\n".as_bytes()).unwrap());
+    }
+
+    #[test]
+    // Verify stdin patterns strip only a leading BOM and line terminators and skip empty lines.
+    fn read_patterns_parses_lines_literally() {
+        let input = "\u{feff}a.txt\r\n\r\n\n  \n#b\n\u{feff}c\n tail \r\nlast".as_bytes();
+        assert_eq!(
+            read_patterns(input).unwrap(),
+            ["a.txt", "  ", "#b", "\u{feff}c", " tail ", "last"]
+        );
+        assert!(read_patterns("\n\r\n".as_bytes()).unwrap().is_empty());
+    }
+
+    #[test]
+    // Verify invalid UTF-8 reports the failing line as an input error.
+    fn read_patterns_rejects_invalid_utf8() {
+        let error = read_patterns(b"ok\r\nbad\xff\n".as_slice()).unwrap_err();
+        assert!(error.downcast_ref::<InputError>().is_some());
+        assert!(error.to_string().contains("line 2"));
+    }
+
+    #[test]
+    // Verify a carriage return is removed only as part of CRLF, not at the end of unterminated input.
+    fn read_patterns_keeps_a_final_unterminated_carriage_return() {
+        assert_eq!(read_patterns("a\r".as_bytes()).unwrap(), ["a\r"]);
+        assert_eq!(read_patterns("\r".as_bytes()).unwrap(), ["\r"]);
+        assert_eq!(read_patterns("a\r\r\nb".as_bytes()).unwrap(), ["a\r", "b"]);
+    }
+
+    #[test]
+    // Verify NUL characters, such as those from UTF-16 input without a BOM, are rejected.
+    fn read_patterns_rejects_nul_characters() {
+        let error = read_patterns(b"ok\nk\0e\0e\0p\0\n".as_slice()).unwrap_err();
+        assert!(error.downcast_ref::<InputError>().is_some());
+        assert!(
+            error
+                .to_string()
+                .contains("line 2 contains a NUL character")
+        );
+    }
 
     #[test]
     // Verify tree markers distinguish directories from symbolic links.

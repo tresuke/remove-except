@@ -28,21 +28,28 @@
 //! - `?` matches any single non-separator character.
 //! - `**` matches zero or more directory levels.
 //! - `[...]` matches any character in the character class, adhering to standard glob rules.
+//! - `{a,b}` matches any of the comma-separated alternatives.
 //! - `.` or `./` represents the processing root and keeps everything beneath it.
-//! - A literal directory path keeps that directory and all of its contents recursively.
+//! - A directory path without glob syntax keeps that directory and all of its contents
+//!   recursively. Glob syntax is `*`, `?`, `[`, `{`, and `}`; on non-Windows platforms,
+//!   `\` is also glob syntax because it escapes the next character. On Windows, `\` is a
+//!   path separator.
 //! - A glob match keeps the matching item and all required ancestor directories up to the root,
 //!   but does *not* recursively keep unmatched descendants. For instance, `dir/*` matches
 //!   items directly beneath `dir/`, but does not recursively keep unmatched contents of
-//!   subdirectories beneath them.
-//! - Relative patterns are resolved relative to the processing root. Paths containing `..`
-//!   traversals outside the root are rejected.
+//!   subdirectories beneath them. Likewise, `dir/**` does not match `dir` itself, and an
+//!   escaped name such as `backup[[]2025]` keeps only that directory; append `/**` to keep
+//!   its contents.
+//! - Relative patterns are resolved relative to the processing root. Patterns containing a
+//!   `..` component are rejected.
 //! - Leading and trailing whitespace in patterns is preserved.
 //!
 //! # Platform Differences
 //!
 //! - **Windows**: Path matching uses Unicode simple case folding (non-Turkic), ignoring
 //!   per-directory NTFS case-sensitivity settings.
-//! - **Linux / Unix**: Path matching is strictly case-sensitive.
+//! - **Ubuntu**: Path matching is strictly case-sensitive. Windows and Ubuntu are the
+//!   supported platforms.
 //!
 //! # Examples
 //!
@@ -74,13 +81,16 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use walkdir::WalkDir;
 
+mod error;
 mod model;
 mod path;
 mod pattern;
 
+pub use error::ValidationError;
+use error::{invalid, invalid_with_source};
 pub use model::{ItemType, PlannedItem, RemovalPlan};
 use path::{display_path, is_drive_relative_path, is_filesystem_root};
 use pattern::compile_patterns;
@@ -97,9 +107,11 @@ use pattern::compile_patterns;
 ///   working directory. Filesystem roots (e.g. `/` on Unix, `C:\` on Windows) and Windows
 ///   drive-relative paths (e.g. `C:foo`) are rejected.
 /// * `patterns` - One or more keep patterns. Patterns may be literal relative paths or glob
-///   patterns (`*`, `?`, `**`, `[...]`). Literal directories match recursively. Relative
-///   patterns are resolved relative to `root`. Patterns traversing outside `root` via `..`
-///   are rejected. Leading and trailing whitespace is preserved.
+///   patterns (`*`, `?`, `**`, `[...]`, `{a,b}`; on non-Windows platforms `\` escapes the
+///   next character). Literal directories without glob syntax match recursively; glob
+///   matches do not keep unmatched descendants. Relative patterns are resolved relative to
+///   `root`. Patterns containing a `..` component are rejected. Leading and trailing
+///   whitespace is preserved.
 ///
 /// # Safety and Behavior
 ///
@@ -118,9 +130,12 @@ use pattern::compile_patterns;
 ///
 /// - **Pattern errors**: `patterns` is empty, a pattern contains invalid glob syntax, or a
 ///   pattern escapes `root` (e.g., starts with `../` or resolves to an ancestor).
-/// - **Root errors**: `root` does not exist, is not a directory, is a filesystem root,
+/// - **Root errors**: `root` cannot be resolved, is not a directory, is a filesystem root,
 ///   or is a Windows drive-relative path.
 /// - **I/O errors**: Directory traversal fails due to filesystem permissions or I/O errors.
+///
+/// Pattern and root errors carry a [`ValidationError`] that can be detected with
+/// [`anyhow::Error::downcast_ref`]. Traversal errors do not.
 ///
 /// # Examples
 ///
@@ -145,25 +160,32 @@ use pattern::compile_patterns;
 /// ```
 pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
     if patterns.is_empty() {
-        bail!("At least one pattern is required");
+        return Err(invalid("At least one pattern is required"));
     }
     if is_drive_relative_path(&root.to_string_lossy()) {
-        bail!(
+        return Err(invalid(format!(
             "Drive-relative root paths are not supported: {}",
             root.display()
-        );
+        )));
     }
 
-    let root = std::fs::canonicalize(root)
-        .with_context(|| format!("Failed to resolve root directory: {}", root.display()))?;
+    let root = std::fs::canonicalize(root).map_err(|error| {
+        invalid_with_source(
+            error,
+            format!("Failed to resolve root directory: {}", root.display()),
+        )
+    })?;
     if is_filesystem_root(&root) {
-        bail!(
+        return Err(invalid(format!(
             "Filesystem roots cannot be used as processing roots: {}",
             root.display()
-        );
+        )));
     }
     if !root.is_dir() {
-        bail!("Root path is not a directory: {}", root.display());
+        return Err(invalid(format!(
+            "Root path is not a directory: {}",
+            root.display()
+        )));
     }
 
     let compiled_patterns = compile_patterns(&root, patterns)?;
@@ -443,6 +465,77 @@ mod tests {
                 .iter()
                 .any(|item| item.relative_path == "file3.txt")
         );
+    }
+
+    #[test]
+    // Verify brace alternation is glob syntax, so it does not keep matched directory contents.
+    fn brace_alternation_is_glob_syntax_and_does_not_keep_contents() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("reports/2024/a.txt").write_str("a").unwrap();
+        temp.child("reports/2025/b.txt").write_str("b").unwrap();
+        temp.child("reports/2026/c.txt").write_str("c").unwrap();
+        temp.child("x{1}.txt").write_str("brace").unwrap();
+        temp.child("x1.txt").write_str("plain").unwrap();
+
+        let dirs_only = build_plan(temp.path(), &["reports/{2024,2025}".to_owned()]).unwrap();
+        let kept = |plan: &super::RemovalPlan| {
+            plan.keep_items
+                .iter()
+                .map(|item| item.relative_path.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            kept(&dirs_only),
+            ["reports", "reports/2024", "reports/2025"]
+        );
+
+        let with_contents =
+            build_plan(temp.path(), &["reports/{2024,2025}/**".to_owned()]).unwrap();
+        assert_eq!(
+            kept(&with_contents),
+            [
+                "reports",
+                "reports/2024",
+                "reports/2024/a.txt",
+                "reports/2025",
+                "reports/2025/b.txt"
+            ]
+        );
+
+        // `{1}` is a one-choice alternation, so it matches `x1.txt`, not the literal name.
+        let literal_braces = build_plan(temp.path(), &["x{1}.txt".to_owned()]).unwrap();
+        assert_eq!(kept(&literal_braces), ["x1.txt"]);
+        let escaped_braces = build_plan(temp.path(), &["x[{]1[}].txt".to_owned()]).unwrap();
+        assert_eq!(kept(&escaped_braces), ["x{1}.txt"]);
+    }
+
+    #[test]
+    // Verify an escaped bracket directory name keeps only the directory unless `/**` follows.
+    fn escaped_bracket_directory_needs_globstar_to_keep_contents() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("backup[2025]/a.txt").write_str("a").unwrap();
+
+        let plan = build_plan(temp.path(), &["backup[[]2025]".to_owned()]).unwrap();
+        assert_eq!(plan.keep_items.len(), 1);
+        assert_eq!(plan.delete_items[0].relative_path, "backup[2025]/a.txt");
+
+        let plan = build_plan(temp.path(), &["backup[[]2025]/**".to_owned()]).unwrap();
+        assert!(plan.delete_items.is_empty());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    // Verify a backslash is a glob escape on non-Windows platforms, not a literal prefix.
+    fn backslash_is_glob_escape_on_non_windows() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("subfile.txt").write_str("escaped").unwrap();
+        temp.child("sub\\file.txt/inner.txt")
+            .write_str("literal directory")
+            .unwrap();
+
+        let plan = build_plan(temp.path(), &["sub\\file.txt".to_owned()]).unwrap();
+        assert_eq!(plan.keep_items.len(), 1);
+        assert_eq!(plan.keep_items[0].relative_path, "subfile.txt");
     }
 
     #[test]
