@@ -32,13 +32,29 @@ CI ではテストと Clippy に `--locked` を指定します。可能であれ
 cargo doc --no-deps
 ```
 
+Windows から Ubuntu のチェックを実行するには、リポジトリーのルートで Docker runner を使います。
+
+```powershell
+.\tools\Test-Rust-Docker.ps1
+```
+
+Docker CLI が `PATH` にない場合は、実行ファイルのパスを指定できます。
+
+```powershell
+.\tools\Test-Rust-Docker.ps1 -DockerPath 'C:\path\to\docker.exe'
+```
+
+接続先の Docker Engine は Linux コンテナーを実行でき、Windows の処理対象ドライブをコンテナー側から `/mnt/<drive>/...` として参照できる必要があります。別の mount 表記を使う Engine では `-DockerSourcePath <absolute-linux-path>` で repository root の見え方を指定できます。runner は Ubuntu 26.04 イメージをビルドし、Rust 1.88.0 と stable のそれぞれで fmt、テスト、Clippy を実行します。リポジトリーは読み取り専用でマウントされ、個人用ファイルなどを除外して一時 Linux ディレクトリーへコピーします。Cargo のビルド出力は toolchain ごとに分離され、Windows 側の `target` は使いません。Cargo registry cache は名前付き Docker volume に保持されます。削除する場合は `docker volume rm remove-except-cargo-registry` を実行してください。
+
+この Ubuntu 検証は Windows ネイティブのチェックを置き換えません。Windows コンソールの確認入力を変更した場合は、Windows で別途確認してください。Docker Engine が別のホストパス表記を必要とする環境では、`-DockerSourcePath` にその Engine から見える絶対 Linux パスを渡します。
+
 必要に応じて release バイナリーをビルドします。
 
 ```sh
 cargo build --release
 ```
 
-依存更新やコード変更でより新しいコンパイラーが必要になった場合は、`rust-version`、CI の toolchain matrix、両 README の記載を合わせて見直します。Ubuntu または WSL で検証する場合は、`/mnt/...` ではなく Linux ホームディレクトリー配下のリポジトリーコピーを使い、Cargo が `PATH` に含まれることを確認してください。
+依存更新やコード変更でより新しいコンパイラーが必要になった場合は、`rust-version`、CI の toolchain matrix、両 README の記載を合わせて見直します。Ubuntu のローカル検証には上記 Docker runner を使います。Ubuntu または WSL を直接使う場合も、Windows マウント上ではなく Linux ホームディレクトリー配下のリポジトリーコピーで Linux ネイティブの Cargo を実行してください。
 
 ## 手動 fixture
 

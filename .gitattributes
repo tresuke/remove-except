@@ -1,1 +1,2 @@
 prepare-manual-test.sh text eol=lf
+tools/docker-ubuntu-test/run-tests.sh text eol=lf

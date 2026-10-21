@@ -32,13 +32,29 @@ CI uses `--locked` for tests and Clippy. Also run these checks locally when prac
 cargo doc --no-deps
 ```
 
+To run the Ubuntu checks from Windows, use the Docker runner from the repository root:
+
+```powershell
+.\tools\Test-Rust-Docker.ps1
+```
+
+If Docker is not on `PATH`, pass its executable path:
+
+```powershell
+.\tools\Test-Rust-Docker.ps1 -DockerPath 'C:\path\to\docker.exe'
+```
+
+The connected Docker Engine must run Linux containers and expose the Windows repository drive inside the engine as `/mnt/<drive>/...`. For engines using a different mount mapping, pass the repository root's absolute Linux path with `-DockerSourcePath`. The runner builds an Ubuntu 26.04 image and runs formatting, tests, and Clippy separately with Rust 1.88.0 and stable. It mounts the repository read-only, excludes local-only files, and copies the source into a temporary Linux directory. Cargo build output is isolated by toolchain; the Windows `target` directory is not used. A named Docker volume preserves the Cargo registry cache. Remove it with `docker volume rm remove-except-cargo-registry`.
+
+Docker Ubuntu checks complement, rather than replace, Windows-native checks. Changes to Windows console confirmation still require separate verification on Windows.
+
 Build a release binary when needed:
 
 ```sh
 cargo build --release
 ```
 
-If a dependency update or code change requires a newer compiler, reassess `rust-version`, the CI toolchain matrix, and both READMEs in the same change. For Ubuntu or WSL validation, use a repository copy under the Linux home directory, not `/mnt/...`; ensure Cargo is available on `PATH`.
+If a dependency update or code change requires a newer compiler, reassess `rust-version`, the CI toolchain matrix, and both READMEs in the same change. Use the Docker runner above for local Ubuntu validation. When using Ubuntu or WSL directly, run Linux-native Cargo from a repository copy under the Linux home directory, not from a Windows-mounted worktree.
 
 ## Manual Fixtures
 
