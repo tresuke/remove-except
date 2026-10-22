@@ -1,6 +1,10 @@
 use assert_cmd::Command;
 use assert_fs::prelude::*;
 
+#[cfg(unix)]
+#[path = "cli/pager_pty.rs"]
+mod pager_pty;
+
 #[test]
 // Verify dry-run lists kept items and deletion targets without modifying files.
 fn dry_run_lists_items_without_removing_them() {
@@ -1030,10 +1034,146 @@ fn confirmation_shows_both_item_lists_before_prompt_and_preserves_items_on_rejec
         .unwrap();
     assert!(keep_list < delete_list);
     assert!(!stdout.contains("Are you sure you want to delete"));
-    assert_eq!(prompt, 0);
+    assert!(stderr.find("Review before deletion:").unwrap() < prompt);
+    assert!(stderr.contains("KEEP: 1 items (including required ancestors); 1 direct matches"));
+    assert!(stderr.contains("DELETE: 1 items; 1 top-level deletion operations"));
     assert!(stdout.contains("Aborted."));
     temp.child("keep.txt").assert("keep");
     temp.child("remove.txt").assert("remove");
+}
+
+#[test]
+fn pager_help_and_invalid_values() {
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let help = String::from_utf8(output).unwrap();
+    assert!(help.contains("--pager <MODE>"));
+    assert!(help.contains("[default: auto]"));
+    assert!(help.contains("auto, always, never"));
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .args(["--pager", "sometimes", "keep.txt"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn explicit_always_rejects_json_and_force_before_deletion() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+    for mode in [vec!["--format", "json"], vec!["--force"]] {
+        let mut command = Command::cargo_bin("remove-except").unwrap();
+        command
+            .current_dir(temp.path())
+            .args(["--pager", "always", "keep.txt"])
+            .args(mode)
+            .assert()
+            .code(2);
+        temp.child("remove.txt").assert("remove");
+    }
+}
+
+#[test]
+fn pager_auto_falls_back_and_never_preserves_the_listing() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+    let mut listings = Vec::new();
+    for mode in ["auto", "never"] {
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["--dry-run", "--pager", mode, "keep.txt"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        assert!(!output.stdout.contains(&0x1b));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("Review before deletion:"));
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr).contains("Viewer unavailable:"),
+            mode == "auto"
+        );
+        listings.push(output.stdout);
+    }
+    assert_eq!(listings[0], listings[1]);
+    temp.child("remove.txt").assert("remove");
+}
+
+#[test]
+fn explicit_always_without_a_terminal_fails_without_deletion() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+    let output = command_without_terminal()
+        .current_dir(temp.path())
+        .args(["--pager", "always", "missing"])
+        .write_stdin("yes\n")
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Cannot start the requested viewer"));
+    temp.child("remove.txt").assert("remove");
+}
+
+#[test]
+fn recap_repeats_no_match_and_summary_warnings() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--pager", "never", "--summary", "both", "missing"])
+        .write_stdin("\n")
+        .assert()
+        .code(3)
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let recap = &stderr[stderr.find("Review before deletion:").unwrap()..];
+    assert!(recap.contains("KEEP: 0 items (including required ancestors); 0 direct matches"));
+    assert!(recap.contains("Everything under the root is a deletion target."));
+    assert!(recap.contains("Summary sections omit paths."));
+    temp.child("remove.txt").assert("remove");
+}
+
+#[test]
+fn json_and_force_do_not_enter_viewer_or_emit_recap() {
+    for mode in ["auto", "never"] {
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("keep.txt").write_str("keep").unwrap();
+        temp.child("remove.txt").write_str("remove").unwrap();
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["--pager", mode, "--format", "json", "keep.txt"])
+            .write_stdin("no\n")
+            .assert()
+            .code(3)
+            .get_output()
+            .clone();
+        let plan = parse_json_stdout(&output);
+        assert_eq!(plan["schema_version"], 1);
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("Review before deletion:"));
+        let forced = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["--pager", mode, "--force", "keep.txt"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        assert!(forced.stderr.is_empty());
+        assert!(!temp.child("remove.txt").path().exists());
+    }
 }
 
 #[test]

@@ -390,11 +390,13 @@ dependencies = [
  "clap",
  "console",
  "globset",
+ "libc",
  "regex-automata",
  "serde",
  "serde_json",
  "unicode-casefold",
  "walkdir",
+ "windows-sys",
 ]
 
 [[package]]

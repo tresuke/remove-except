@@ -37,6 +37,10 @@ walkdir = "2"
 [target.'cfg(windows)'.dependencies]
 regex-automata = "0.4"
 unicode-casefold = "0.2"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 assert_cmd = "2"

@@ -20,7 +20,7 @@ cargo install --git https://github.com/tresuke/remove-except --tag v0.2.4 --lock
 
 You can also clone the repository and install from its top-level directory with `cargo install --path . --locked`.
 
-`v0.2.4` does not include `--patterns-from-stdin` and `--format json` (described in “Pipeline Integration”), exit codes `2` and `3`, or line-based confirmation input. After these changes have been merged to the default branch, you can use them before the next release by installing from that branch without `--tag`.
+`v0.2.4` does not include `--patterns-from-stdin` and `--format json` (described in “Pipeline Integration”), exit codes `2` and `3`, line-based confirmation input, the built-in viewer (`--pager`), or the final-confirmation recap. After these changes have been merged to the default branch, you can use them before the next release by installing from that branch without `--tag`.
 
 Prebuilt binaries and a crates.io package are not currently available. Future GitHub Releases may include Windows x64 and Linux x64 binaries. These binaries are planned to embed dependency information with [`cargo-auditable`](https://github.com/rust-secure-code/cargo-auditable), allowing scanners to identify dependency crate names and versions. Release archives are also planned to include GitHub Actions build provenance attestations. Neither embedded dependency data nor an attestation guarantees that a binary is safe. The Linux binary is built with Ubuntu 22.04 and requires glibc 2.35 or later. When a release includes binary assets, choose the archive matching your platform and verify it against the accompanying SHA-256 file. Verify its provenance with GitHub CLI:
 
@@ -61,6 +61,7 @@ remove-except --root work --dry-run keep.txt '**/*.md'
 | `-f`, `--force` | Deletes without showing the confirmation prompt. Pattern and directory validation still apply. |
 | `--patterns-from-stdin` | Reads keep patterns from standard input, one per line. They are combined with positional patterns using OR semantics. |
 | `--format <FORMAT>` | Plan output format: `human` (default) or `json`. |
+| `--pager <MODE>` | Built-in viewer: `auto` (default), `always`, or `never`. `always` conflicts with JSON and `--force`. |
 | `--layout <LAYOUT>` | Output layout: `tree` (default) or `flat`. |
 | `--sort-by-type` | Flat layout only. Sorts by Directory, File, then Symlink. |
 | `--summary <SECTION>` | Shows counts for `keep`, `delete`, or `both` instead of paths in the selected sections. |
@@ -180,6 +181,8 @@ In a normal run, the tool displays both lists before asking for confirmation. Se
 
 If none of the supplied keep patterns matches any item, a warning is shown and everything under the processing directory becomes a deletion target.
 
+Immediately before the final confirmation in human output, stderr repeats the processing directory, kept count (including required ancestors), direct match count, deletion-item count, and top-level deletion-operation count. No-match and omitted-path warnings are repeated as applicable. This recap does not replace reviewing every item. It is not added for JSON, `--force`, `--dry-run`, or plans without deletion targets.
+
 ## Output and Options
 
 The output starts with a status label and the processing directory. When there are no deletion targets, the label is `NO REMOVALS`, including in a dry run. Otherwise, dry runs show `PREVIEW ONLY`, normal runs that require confirmation show `CONFIRM TO DELETE`, and `--force` shows `FORCE DELETE`. On a colored TTY, these labels are highlighted in green, cyan, yellow, and red, respectively. The labels and descriptions remain when color is disabled.
@@ -218,6 +221,32 @@ When a full path listing is shown, a legend appears after the processing-directo
 
 In the `human` format, kept items, deletion targets, and execution results are written to standard output. Warnings, errors, and confirmation prompts are written to standard error (see “JSON Output” for `--format json`). Human-readable output is not a stable format for parsing by other programs.
 
+### Browsing Large Plans
+
+`--pager auto` (the default) opens the built-in viewer when a normal run or `--dry-run` produces human output that does not fit the terminal screen. Tree/Flat and summary choices are preserved. Long paths wrap without truncation. The viewer shows the processing directory, status, position, and controls, and reflows when the terminal is resized.
+
+| Key | Action |
+| --- | --- |
+| Up / Down | Move one display row |
+| PageUp / PageDown | Move one page |
+| Home / End | Go to the beginning / end |
+| Tab / Shift+Tab | Move between keep / delete sections |
+| `c` | Finish viewing; proceed to a separate final confirmation, or exit with code 0 for dry-run / no deletion targets |
+| `q` / Esc / Ctrl+C | Cancel viewing without deleting anything; exit code 3 |
+
+Enter and `y` do not authorize deletion in the viewer. On completion, pending viewer input is discarded and terminal state restored before a new, whole-line confirmation answer is read from the controlling terminal. Viewing, confirmation, and deletion use the same plan; this does not prevent other programs from changing files during review.
+
+`--pager always` opens even short listings and conflicts with JSON and `--force`. `--pager never` uses normal output. With the default auto mode, JSON and `--force` (including its combination with `--dry-run`) do not use the viewer.
+
+If stdout is not a TTY, the controlling terminal is unavailable, the terminal is unsupported, or the screen is too small, auto reports the reason to stderr and uses normal output. Always mode instead exits with code 1 without deleting anything. Redirected stdin without `--patterns-from-stdin` is treated the same way to avoid taking over confirmation input. Piped `--patterns-from-stdin` can use the viewer when a supported output terminal and controlling terminal are available.
+
+Terminal I/O or restoration failures after starting the viewer stop before deletion with exit code 1 rather than silently continuing with normal output. The viewer does not change keep/delete decisions or deletion order. Search, folding, and interactive plan editing are not supported.
+
+```sh
+remove-except --dry-run --pager always keep.txt
+remove-except --pager never keep.txt
+```
+
 ## Pipeline Integration
 
 `--patterns-from-stdin` and `--format json` let you combine the tool with other commands in PowerShell or Bash. Passing patterns through standard input and receiving the plan as JSON can be used separately or together.
@@ -235,7 +264,7 @@ With `--patterns-from-stdin`, standard input is read as one pattern per line.
 - NUL-delimited input is not supported. File names containing newlines cannot be passed as patterns.
 - Without a pipe or redirection, you can type patterns in the terminal, one per line. The command writes a note to standard error that it is waiting for input and how to finish. Finish input with Ctrl+D on Ubuntu, or Ctrl+Z followed by Enter on Windows.
 
-Because standard input is used for patterns, the confirmation answer is read from the controlling terminal (the console on Windows, `/dev/tty` on Ubuntu). When no terminal is available, such as in CI or scheduled jobs, nothing is deleted and the command exits with code 3. In that case, preview with `--dry-run`, or use `--force` after reviewing the plan. Without `--patterns-from-stdin`, the confirmation answer is still read from standard input as before.
+Because standard input is used for patterns, the confirmation answer is read from the controlling terminal (the console on Windows, `/dev/tty` on Ubuntu). When no terminal is available, such as in CI or scheduled jobs, nothing is deleted and the command exits with code 3 (failure to start an explicitly requested `--pager always` exits with code 1). In that case, preview with `--dry-run`, or use `--force` after reviewing the plan. Without `--patterns-from-stdin` or an active built-in viewer, the confirmation answer is still read from standard input as before.
 
 Bash example (keep only files tracked by Git, plus `.git`):
 
@@ -326,9 +355,9 @@ When reading JSON in PowerShell, also check that it is decoded as UTF-8. See “
 | Exit code | Meaning |
 | --- | --- |
 | `0` | The plan was shown, or deletion completed (including when there was nothing to delete). |
-| `1` | Runtime error, such as a scan or deletion failure or a path that cannot be represented in JSON. |
+| `1` | Runtime error, such as a scan or deletion failure, a path that cannot be represented in JSON, failure to start an explicitly requested viewer, or a terminal error during viewing. |
 | `2` | Invalid arguments, standard input, processing directory, or patterns. |
-| `3` | Nothing was deleted because confirmation was declined or no terminal was available to confirm. |
+| `3` | Nothing was deleted because viewing or confirmation was cancelled, or no terminal was available to confirm. |
 
 If an error occurs during deletion (exit code 1), items already deleted are not restored.
 

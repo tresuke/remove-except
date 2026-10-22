@@ -1,5 +1,7 @@
 //! Displays a keep/deletion plan beneath the current directory and deletes items after confirmation.
 
+mod pager;
+
 use std::fmt;
 use std::fs;
 use std::io::{self, BufRead, BufReader, BufWriter, IsTerminal, Read, Write};
@@ -29,7 +31,7 @@ const HELP_STYLES: Styles = Styles::styled()
     version,
     about = "Keep matching items and remove the rest under a processing root",
     long_about = "Keep items matching one or more paths or glob patterns and remove the rest under the selected root. Multiple patterns are combined with OR. Always review the plan before deleting items.",
-    after_long_help = "Output:\n  Tree: directories end with / and symlinks with @. With color, directories are blue, symlinks cyan, and kept parent directories in the delete tree green. Without color, kept parents end with +.\n  Flat: ItemType identifies each entry. Without color, directory and symlink paths end with / and @. Flat output has no kept-parent marker.\n  Status labels: NO REMOVALS (green) when there are no deletion operations; otherwise PREVIEW ONLY (cyan) for dry runs, CONFIRM TO DELETE (yellow) when confirmation is required, FORCE DELETE (red) with --force.\n  Colors are used automatically when output is a terminal and color is available.\n\nPipelines:\n  --patterns-from-stdin reads one UTF-8 pattern per line (LF or CRLF). A leading BOM is removed, empty lines are ignored, other whitespace is kept, and # has no special meaning. Invalid UTF-8 or NUL characters (for example, UTF-16 input) are rejected. Confirmation is then read from the terminal; without one, nothing is deleted.\n  --format json writes exactly one JSON object (schema_version 1) with root, direct_match_count, keep_items, delete_items, and delete_roots to stdout. Messages and prompts go to stderr. New fields may be added without changing schema_version.\n\nExit codes:\n  0 plan shown or deletion completed; 1 runtime error; 2 invalid arguments, input, root, or patterns; 3 nothing deleted because confirmation was declined or unavailable.",
+    after_long_help = "Output:\n  Tree: directories end with / and symlinks with @. With color, directories are blue, symlinks cyan, and kept parent directories in the delete tree green. Without color, kept parents end with +.\n  Flat: ItemType identifies each entry. Without color, directory and symlink paths end with / and @. Flat output has no kept-parent marker.\n  Status labels: NO REMOVALS (green) when there are no deletion operations; otherwise PREVIEW ONLY (cyan) for dry runs, CONFIRM TO DELETE (yellow) when confirmation is required, FORCE DELETE (red) with --force.\n  Colors are used automatically when output is a terminal and color is available.\n\nViewer:\n  --pager auto (default) pages long human output on supported terminals in normal and dry runs. JSON and --force bypass it. --pager always conflicts with JSON and --force; --pager never uses normal output.\n  Up/Down scroll, PageUp/PageDown page, Home/End move to the beginning/end, Tab/Shift+Tab switch sections. Long paths wrap without truncation. c finishes viewing; q/Esc/Ctrl+C cancel (code 3). Enter and y never approve deletion in the viewer.\n  Pending viewer input is discarded before a separate whole-line terminal confirmation. Only y/yes confirms (case-insensitive, surrounding whitespace ignored); anything else or EOF cancels.\n  Auto explains unavailable-terminal fallback on stderr; always fails with code 1. Terminal errors after startup stop without deletion. Human final confirmation repeats root, counts, and applicable warnings on stderr.\n\nPipelines:\n  --patterns-from-stdin reads one UTF-8 pattern per line (LF or CRLF). A leading BOM is removed, empty lines are ignored, other whitespace is kept, and # has no special meaning. Invalid UTF-8 or NUL characters (for example, UTF-16 input) are rejected. Confirmation is then read from the terminal; without one, nothing is deleted.\n  --format json writes exactly one JSON object (schema_version 1) with root, direct_match_count, keep_items, delete_items, and delete_roots to stdout. Messages and prompts go to stderr. New fields may be added without changing schema_version.\n\nExit codes:\n  0 plan shown or deletion completed; 1 runtime error (including viewer errors); 2 invalid arguments, input, root, or patterns; 3 nothing deleted because viewing was cancelled or confirmation was declined or unavailable.",
     styles = HELP_STYLES
 )]
 struct Args {
@@ -68,6 +70,15 @@ struct Args {
     #[arg(
         long,
         value_enum,
+        value_name = "MODE",
+        default_value = "auto",
+        help = "Built-in viewer: auto for long terminal output, always (conflicts with JSON/force), or never"
+    )]
+    pager: PagerMode,
+
+    #[arg(
+        long,
+        value_enum,
         value_name = "SECTION",
         help = "Summarize paths in SECTION: keep, delete, or both"
     )]
@@ -100,6 +111,13 @@ struct Args {
 enum OutputFormat {
     Human,
     Json,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum PagerMode {
+    Auto,
+    Always,
+    Never,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -159,6 +177,14 @@ fn main() -> ExitCode {
 }
 
 fn validate_option_combinations(args: &Args) {
+    if args.pager == PagerMode::Always && (args.format == OutputFormat::Json || args.force) {
+        Args::command()
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "--pager always cannot be used with --format json or --force",
+            )
+            .exit();
+    }
     let conflict = if args.format == OutputFormat::Json {
         if args.summary.is_some() {
             Some("--format json cannot be used with --summary; JSON always contains the full plan")
@@ -237,10 +263,69 @@ fn run(args: Args) -> Result<Outcome> {
         Some(SummarySection::Both) => (true, true),
         None => (false, false),
     };
+    let mut viewed = false;
     if let Some(json_plan) = json_plan {
         let mut output = io::stdout().lock();
         output.write_all(json_plan.as_bytes())?;
         output.flush()?;
+    } else if args.pager != PagerMode::Never && !args.force {
+        let mut text = Vec::new();
+        let sections = render_plan(
+            &mut text,
+            &plan,
+            args.dry_run,
+            args.force,
+            keep_summary,
+            delete_summary,
+            args.layout == Some(Layout::Flat),
+            args.sort_by_type,
+            io::stdout().is_terminal() && console::colors_enabled(),
+        )?;
+        let document = pager::Document {
+            text: String::from_utf8(text).context("Human plan is not valid UTF-8")?,
+            sections,
+            root: escape_control_characters(&display_root_path(plan.root())),
+            status: if plan.delete_roots().is_empty() {
+                "NO REMOVALS"
+            } else if args.dry_run {
+                "PREVIEW ONLY"
+            } else {
+                "CONFIRM TO DELETE"
+            },
+            warning: plan.direct_match_count() == 0,
+        };
+        let available = if !args.patterns_from_stdin && !io::stdin().is_terminal() {
+            Err(io::Error::other(
+                "Standard input is redirected for confirmation",
+            ))
+        } else {
+            pager::Viewer::prepare(&document)
+        };
+        match available {
+            Ok(viewer) if args.pager == PagerMode::Always || viewer.needs_paging() => {
+                viewed = true;
+                if viewer
+                    .show(&document)
+                    .context("Failed to display the plan viewer")?
+                    == pager::ViewerOutcome::Cancelled
+                {
+                    report_status(false, "Aborted.");
+                    return Ok(Outcome::NotExecuted);
+                }
+            }
+            Ok(_) => {
+                let mut output = io::stdout().lock();
+                output.write_all(document.text.as_bytes())?;
+                output.flush()?;
+            }
+            Err(error) if args.pager == PagerMode::Auto => {
+                eprintln!("Viewer unavailable: {error}. Using normal output.");
+                let mut output = io::stdout().lock();
+                output.write_all(document.text.as_bytes())?;
+                output.flush()?;
+            }
+            Err(error) => return Err(error).context("Cannot start the requested viewer"),
+        }
     } else {
         print_plan(
             &plan,
@@ -259,7 +344,10 @@ fn run(args: Args) -> Result<Outcome> {
 
     if !args.force {
         let has_summaries = keep_summary || delete_summary;
-        let confirmed = if args.patterns_from_stdin {
+        if !json {
+            write_confirmation_recap(&mut io::stderr().lock(), &plan, has_summaries)?;
+        }
+        let confirmed = if args.patterns_from_stdin || viewed {
             match confirm_on_terminal(confirmation_prompt(has_summaries))? {
                 Some(confirmed) => confirmed,
                 None => {
@@ -497,6 +585,44 @@ fn confirmation_prompt(has_summaries: bool) -> &'static str {
     }
 }
 
+fn write_confirmation_recap(
+    output: &mut impl Write,
+    plan: &RemovalPlan,
+    has_summaries: bool,
+) -> io::Result<()> {
+    writeln!(output, "Review before deletion:")?;
+    writeln!(
+        output,
+        "  Root: {}",
+        escape_control_characters(&display_root_path(plan.root()))
+    )?;
+    writeln!(
+        output,
+        "  KEEP: {} items (including required ancestors); {} direct matches",
+        plan.keep_items().len(),
+        plan.direct_match_count()
+    )?;
+    writeln!(
+        output,
+        "  DELETE: {} items; {} top-level deletion operations",
+        plan.delete_items().len(),
+        plan.delete_roots().len()
+    )?;
+    if plan.direct_match_count() == 0 {
+        writeln!(
+            output,
+            "WARNING: No keep matches. Everything under the root is a deletion target."
+        )?;
+    }
+    if has_summaries {
+        writeln!(
+            output,
+            "Summary sections omit paths. Run --dry-run without --summary to review every item before deleting."
+        )?;
+    }
+    output.flush()
+}
+
 fn confirm_deletion(has_summaries: bool) -> Result<bool> {
     let prompt = confirmation_prompt(has_summaries);
     write_prompt(prompt)?;
@@ -569,7 +695,7 @@ fn print_plan(
 
 #[allow(clippy::too_many_arguments)]
 fn render_plan(
-    mut output: &mut impl Write,
+    output: &mut impl Write,
     plan: &remove_except::RemovalPlan,
     dry_run: bool,
     force: bool,
@@ -578,7 +704,12 @@ fn render_plan(
     flat: bool,
     sort_by_type: bool,
     colors_enabled: bool,
-) -> io::Result<()> {
+) -> io::Result<[usize; 2]> {
+    let mut counted = LineWriter {
+        inner: output,
+        lines: 0,
+    };
+    let mut output = &mut counted;
     let (status_label, status_detail) = if plan.delete_roots().is_empty() {
         ("NO REMOVALS", "No deletion operations are needed")
     } else if dry_run {
@@ -624,6 +755,7 @@ fn render_plan(
         delete_root_count: plan.delete_roots().len(),
         colors_enabled,
     };
+    let keep_line = output.lines;
     print_item_section(
         &mut output,
         "Items to keep",
@@ -632,6 +764,7 @@ fn render_plan(
         &options,
     )?;
     writeln!(output)?;
+    let delete_line = output.lines;
     print_item_section(
         &mut output,
         "Items to delete",
@@ -648,7 +781,27 @@ fn render_plan(
         )?;
     }
 
-    Ok(())
+    Ok([keep_line, delete_line])
+}
+
+struct LineWriter<'a, W> {
+    inner: &'a mut W,
+    lines: usize,
+}
+
+impl<W: Write> Write for LineWriter<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(bytes)?;
+        self.lines += bytes[..written]
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count();
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 fn print_legend(output: &mut impl Write, flat: bool, colors_enabled: bool) -> io::Result<()> {
