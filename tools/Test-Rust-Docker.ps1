@@ -47,6 +47,8 @@ $runArguments = @(
     "type=bind,source=$dockerSource,target=/workspace-input,readonly"
     '--mount'
     'type=volume,source=remove-except-cargo-registry,target=/usr/local/cargo/registry'
+    '--mount'
+    'type=volume,source=remove-except-cargo-target,target=/cargo-target-cache'
     $imageTag
 )
 
