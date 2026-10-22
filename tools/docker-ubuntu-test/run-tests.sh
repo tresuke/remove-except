@@ -2,8 +2,13 @@
 set -Eeuo pipefail
 
 source_root=/workspace-input
-workspace_root=$(mktemp -d "$HOME/remove-except-docker-test.XXXXXX")
-trap 'rm -rf "$workspace_root"' EXIT
+workspace_root=/workspace-copy
+if [[ -e "$workspace_root" || -L "$workspace_root" ]]; then
+    printf 'Temporary workspace already exists: %s\n' "$workspace_root" >&2
+    exit 1
+fi
+mkdir -- "$workspace_root"
+trap 'rm -rf -- "$workspace_root"' EXIT
 
 tar -C "$source_root" \
     --exclude='./.git' \
@@ -31,7 +36,7 @@ cd "$workspace_root"
 
 run_checks() {
     local toolchain=$1
-    local target_dir="$workspace_root/target/$toolchain"
+    local target_dir="/cargo-target-cache/$toolchain"
 
     printf '\n=== Ubuntu 26.04 / Rust %s ===\n' "$toolchain"
     rustc +"$toolchain" --version

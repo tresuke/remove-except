@@ -44,9 +44,9 @@ Docker CLI が `PATH` にない場合は、実行ファイルのパスを指定�
 .\tools\Test-Rust-Docker.ps1 -DockerPath 'C:\path\to\docker.exe'
 ```
 
-接続先の Docker Engine は Linux コンテナーを実行でき、Windows の処理対象ドライブをコンテナー側から `/mnt/<drive>/...` として参照できる必要があります。別の mount 表記を使う Engine では `-DockerSourcePath <absolute-linux-path>` で repository root の見え方を指定できます。runner は Ubuntu 26.04 イメージをビルドし、Rust 1.88.0 と stable のそれぞれで fmt、テスト、Clippy を実行します。リポジトリーは読み取り専用でマウントされ、個人用ファイルなどを除外して一時 Linux ディレクトリーへコピーします。Cargo のビルド出力は toolchain ごとに分離され、Windows 側の `target` は使いません。Cargo registry cache は名前付き Docker volume に保持されます。削除する場合は `docker volume rm remove-except-cargo-registry` を実行してください。
+接続先の Docker Engine は Linux コンテナーを実行でき、Windows の処理対象ドライブをコンテナー側から `/mnt/<drive>/...` として参照できる必要があります。別の mount 表記を使う Engine では `-DockerSourcePath <absolute-linux-path>` で repository root の見え方を指定できます。runner は Ubuntu 26.04 イメージをビルドし、Rust 1.88.0 と stable のそれぞれで fmt、テスト、Clippy を実行します。リポジトリーは読み取り専用でマウントされ、個人用ファイルなどを除外して固定パスの一時 Linux ディレクトリーへコピーします。Cargo のビルド出力は `remove-except-cargo-target` volume にtoolchain別に保持され、Windows 側の `target` は使いません。Cargo registry cache は別の `remove-except-cargo-registry` volume に保持されます。target cacheを削除する場合は `docker volume rm remove-except-cargo-target`、registry cacheを削除する場合は `docker volume rm remove-except-cargo-registry` を実行してください。
 
-この Ubuntu 検証は Windows ネイティブのチェックを置き換えません。Windows コンソールの確認入力を変更した場合は、Windows で別途確認してください。Docker Engine が別のホストパス表記を必要とする環境では、`-DockerSourcePath` にその Engine から見える絶対 Linux パスを渡します。
+target volume はDocker Engine側に残り、`docker run --rm` では削除されません。ソース由来のビルド成果物やdebug情報が残るため、不要になったら上記コマンドで削除してください。target cacheは同じDocker Engine上で共有されるため、このrunnerは同時実行せず順番に実行してください。このUbuntu検証はWindowsネイティブのチェックを置き換えません。Windowsコンソールの確認入力を変更した場合は、Windowsで別途確認してください。
 
 必要に応じて release バイナリーをビルドします。
 
