@@ -1043,6 +1043,27 @@ fn confirmation_shows_both_item_lists_before_prompt_and_preserves_items_on_rejec
 }
 
 #[test]
+fn redirected_recap_has_no_ansi_even_when_color_is_forced() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--pager", "never", "keep.txt"])
+        .env("CLICOLOR_FORCE", "1")
+        .write_stdin("n\n")
+        .assert()
+        .code(3)
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Review before deletion:"));
+    assert!(!stderr.contains('\x1b'));
+    temp.child("remove.txt").assert("remove");
+}
+
+#[test]
 fn pager_help_and_invalid_values() {
     let output = Command::cargo_bin("remove-except")
         .unwrap()

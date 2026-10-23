@@ -225,6 +225,12 @@ In the `human` format, kept items, deletion targets, and execution results are w
 
 `--pager auto` (the default) opens the built-in viewer when a normal run or `--dry-run` produces human output that does not fit the terminal screen. Tree/Flat and summary choices are preserved. Long paths wrap without truncation. The viewer shows the processing directory, status, position, and controls, and reflows when the terminal is resized.
 
+Wrapping preserves grapheme clusters, including combining characters and ZWJ emoji, and measures complete display lines. Actual rendering may vary with the terminal and font. A single cluster wider than a row is also treated as insufficient screen space: before startup, auto explains the fallback to normal output and always exits with code 1; after startup, the viewer stops with code 1 without deleting anything.
+
+The position label shows `KEEP` when keep-section content is visible, `DELETE` when delete-section content is visible, `KEEP + DELETE` when both are visible, or `PLAN` for introductory information alone. Tab/Shift+Tab cycle through reachable section positions. When both sections have the same destination (for example, the whole plan fits on one screen), they do not scroll.
+
+With color enabled, position labels use bold green for `KEEP`, bold red for `DELETE`, and bold cyan for `PLAN`. `KEEP + DELETE` colors each label separately; separators and line numbers remain unstyled.
+
 | Key | Action |
 | --- | --- |
 | Up / Down | Move one display row |
@@ -235,6 +241,8 @@ In the `human` format, kept items, deletion targets, and execution results are w
 | `q` / Esc / Ctrl+C | Cancel viewing without deleting anything; exit code 3 |
 
 Enter and `y` do not authorize deletion in the viewer. On completion, pending viewer input is discarded and terminal state restored before a new, whole-line confirmation answer is read from the controlling terminal. Viewing, confirmation, and deletion use the same plan; this does not prevent other programs from changing files during review.
+
+Immediately before final confirmation, `Review before deletion:` uses stderr's terminal and color settings: a bold yellow heading, a bold `Root:` label, bold green `KEEP:`, and bold red `DELETE:`. No-match and summary-omission warnings are yellow with bold headings. Paths, counts, and ordinary explanations remain unstyled. Viewer colors use stdout's settings independently of the recap. When color is disabled or the respective stream is redirected, the same wording is shown without styling.
 
 `--pager always` opens even short listings and conflicts with JSON and `--force`. `--pager never` uses normal output. With the default auto mode, JSON and `--force` (including its combination with `--dry-run`) do not use the viewer.
 

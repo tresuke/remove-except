@@ -5,6 +5,7 @@ mod pager;
 use std::fmt;
 use std::fs;
 use std::io::{self, BufRead, BufReader, BufWriter, IsTerminal, Read, Write};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -345,7 +346,12 @@ fn run(args: Args) -> Result<Outcome> {
     if !args.force {
         let has_summaries = keep_summary || delete_summary;
         if !json {
-            write_confirmation_recap(&mut io::stderr().lock(), &plan, has_summaries)?;
+            write_confirmation_recap(
+                &mut io::stderr().lock(),
+                &plan,
+                has_summaries,
+                io::stderr().is_terminal() && console::colors_enabled_stderr(),
+            )?;
         }
         let confirmed = if args.patterns_from_stdin || viewed {
             match confirm_on_terminal(confirmation_prompt(has_summaries))? {
@@ -589,35 +595,56 @@ fn write_confirmation_recap(
     output: &mut impl Write,
     plan: &RemovalPlan,
     has_summaries: bool,
+    colors_enabled: bool,
 ) -> io::Result<()> {
-    writeln!(output, "Review before deletion:")?;
+    let style = console::Style::new()
+        .for_stderr()
+        .force_styling(colors_enabled);
+    let bold = style.clone().bold();
     writeln!(
         output,
-        "  Root: {}",
+        "{}",
+        bold.clone().yellow().apply_to("Review before deletion:")
+    )?;
+    writeln!(
+        output,
+        "  {} {}",
+        bold.apply_to("Root:"),
         escape_control_characters(&display_root_path(plan.root()))
     )?;
     writeln!(
         output,
-        "  KEEP: {} items (including required ancestors); {} direct matches",
+        "  {} {} items (including required ancestors); {} direct matches",
+        bold.clone().green().apply_to("KEEP:"),
         plan.keep_items().len(),
         plan.direct_match_count()
     )?;
     writeln!(
         output,
-        "  DELETE: {} items; {} top-level deletion operations",
+        "  {} {} items; {} top-level deletion operations",
+        bold.clone().red().apply_to("DELETE:"),
         plan.delete_items().len(),
         plan.delete_roots().len()
     )?;
     if plan.direct_match_count() == 0 {
         writeln!(
             output,
-            "WARNING: No keep matches. Everything under the root is a deletion target."
+            "{} {}",
+            bold.clone().yellow().apply_to("WARNING:"),
+            style
+                .clone()
+                .yellow()
+                .apply_to("No keep matches. Everything under the root is a deletion target.")
         )?;
     }
     if has_summaries {
         writeln!(
             output,
-            "Summary sections omit paths. Run --dry-run without --summary to review every item before deleting."
+            "{} {}",
+            bold.yellow().apply_to("Summary sections omit paths."),
+            style
+                .yellow()
+                .apply_to("Run --dry-run without --summary to review every item before deleting.")
         )?;
     }
     output.flush()
@@ -704,7 +731,7 @@ fn render_plan(
     flat: bool,
     sort_by_type: bool,
     colors_enabled: bool,
-) -> io::Result<[usize; 2]> {
+) -> io::Result<[Range<usize>; 2]> {
     let mut counted = LineWriter {
         inner: output,
         lines: 0,
@@ -763,6 +790,7 @@ fn render_plan(
         keep_summary,
         &options,
     )?;
+    let keep_end = output.lines;
     writeln!(output)?;
     let delete_line = output.lines;
     print_item_section(
@@ -772,6 +800,7 @@ fn render_plan(
         delete_summary,
         &options,
     )?;
+    let delete_end = output.lines;
 
     if keep_summary || delete_summary {
         writeln!(output)?;
@@ -781,7 +810,7 @@ fn render_plan(
         )?;
     }
 
-    Ok([keep_line, delete_line])
+    Ok([keep_line..keep_end, delete_line..delete_end])
 }
 
 struct LineWriter<'a, W> {
@@ -1342,6 +1371,93 @@ mod tests {
         assert!(no_kept_parent_output.contains("Colors: directories ("));
         assert!(no_kept_parent_output.contains("kept parents ("));
         console::set_colors_enabled(colors_were_enabled);
+    }
+
+    #[test]
+    fn rendered_section_ranges_exclude_spacing_and_shared_warnings() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("keep.txt").write_str("keep").unwrap();
+        temp.child("remove.txt").write_str("remove").unwrap();
+        for pattern in ["keep.txt", ".", "missing"] {
+            let plan = build_plan(temp.path(), &[pattern.to_owned()]).unwrap();
+            for summary in [true, false] {
+                for flat in [true, false] {
+                    let mut output = Vec::new();
+                    let sections = render_plan(
+                        &mut output,
+                        &plan,
+                        true,
+                        false,
+                        summary,
+                        summary,
+                        flat,
+                        false,
+                        false,
+                    )
+                    .unwrap();
+                    let text = String::from_utf8(output).unwrap();
+                    let lines: Vec<_> = text.lines().collect();
+                    assert!(lines[sections[0].start].starts_with(if summary {
+                        "KEEP:"
+                    } else {
+                        "Items to keep"
+                    }));
+                    assert!(lines[sections[1].start].starts_with(if summary {
+                        "DELETE:"
+                    } else {
+                        "Items to delete"
+                    }));
+                    assert_eq!(sections[0].end + 1, sections[1].start);
+                    assert_eq!(lines[sections[0].end], "");
+                    for section in sections {
+                        assert!(!lines[section.clone()].is_empty());
+                        assert!(
+                            lines[section]
+                                .iter()
+                                .all(|line| !line.contains("Summary sections"))
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn confirmation_recap_styles_labels_and_warnings_without_changing_text() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("keep.txt").write_str("keep").unwrap();
+        temp.child("remove.txt").write_str("remove").unwrap();
+        for pattern in ["keep.txt", "missing"] {
+            let plan = build_plan(temp.path(), &[pattern.to_owned()]).unwrap();
+            for summaries in [false, true] {
+                let mut plain = Vec::new();
+                let mut colored = Vec::new();
+                super::write_confirmation_recap(&mut plain, &plan, summaries, false).unwrap();
+                super::write_confirmation_recap(&mut colored, &plan, summaries, true).unwrap();
+                let plain = String::from_utf8(plain).unwrap();
+                let colored = String::from_utf8(colored).unwrap();
+                assert!(!plain.contains('\x1b'));
+                assert_eq!(console::strip_ansi_codes(&colored), plain);
+                for (color, text) in [
+                    (33, "Review before deletion:"),
+                    (32, "KEEP:"),
+                    (31, "DELETE:"),
+                ] {
+                    assert!(colored.contains(&format!("\x1b[{color}m\x1b[1m{text}\x1b[0m")));
+                }
+                assert!(colored.contains("\x1b[1mRoot:\x1b[0m "));
+                assert!(colored.contains(&format!(
+                    "Root:\x1b[0m {}\n",
+                    super::escape_control_characters(&super::display_root_path(plan.root()))
+                )));
+                if pattern == "missing" {
+                    assert!(colored.contains("\x1b[33m\x1b[1mWARNING:\x1b[0m"));
+                }
+                if summaries {
+                    assert!(colored.contains("\x1b[33m\x1b[1mSummary sections omit paths.\x1b[0m"));
+                }
+            }
+        }
     }
 
     #[test]
