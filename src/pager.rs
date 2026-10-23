@@ -572,7 +572,16 @@ mod tests {
         let doc = document("a\nb\nc\nd\ne\nf\ng\nh\n");
         let page = doc.page((10, 100)).unwrap();
         let mut position = Position::default();
-        for key in [Key::Enter, Key::Char('y'), Key::Unknown] {
+        for key in [
+            Key::Enter,
+            Key::Char('y'),
+            Key::Char('Y'),
+            Key::Char('C'),
+            Key::Char('Q'),
+            Key::Char('\0'),
+            Key::Char('\x04'),
+            Key::Unknown,
+        ] {
             assert_eq!(position.key(key, &page), None);
         }
         position.key(Key::PageDown, &page);

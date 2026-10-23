@@ -18,7 +18,16 @@ impl Terminal {
         let path = "CONIN$";
         #[cfg(unix)]
         let path = "/dev/tty";
-        let input = OpenOptions::new().read(true).write(true).open(path)?;
+        let input = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!("Cannot open the controlling terminal for viewer input: {error}"),
+                )
+            })?;
         let original = platform::mode(&input)?;
         Ok(Self {
             input,
@@ -80,8 +89,9 @@ mod platform {
     use windows_sys::Win32::Foundation::{WAIT_FAILED, WAIT_TIMEOUT};
     use windows_sys::Win32::System::Console::{
         ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, FlushConsoleInputBuffer,
-        GetConsoleMode, INPUT_RECORD, KEY_EVENT, PeekConsoleInputW, ReadConsoleInputW,
-        SHIFT_PRESSED, SetConsoleMode,
+        GetConsoleMode, INPUT_RECORD, KEY_EVENT, LEFT_ALT_PRESSED, LEFT_CTRL_PRESSED,
+        PeekConsoleInputW, RIGHT_ALT_PRESSED, RIGHT_CTRL_PRESSED, ReadConsoleInputW, SHIFT_PRESSED,
+        SetConsoleMode,
     };
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
@@ -149,26 +159,59 @@ mod platform {
         }
         // EventType identifies the active union member.
         let event = unsafe { record.Event.KeyEvent };
-        if event.bKeyDown == 0 {
-            return Ok(None);
-        }
         // UnicodeChar is the UTF-16 variant of the console key event.
         let character = unsafe { event.uChar.UnicodeChar };
-        let key = match event.wVirtualKeyCode {
-            0x26 => Key::ArrowUp,
-            0x28 => Key::ArrowDown,
-            0x21 => Key::PageUp,
-            0x22 => Key::PageDown,
-            0x24 => Key::Home,
-            0x23 => Key::End,
-            0x1b => Key::Escape,
-            0x0d => Key::Enter,
-            0x09 if event.dwControlKeyState & SHIFT_PRESSED != 0 => Key::BackTab,
-            0x09 => Key::Tab,
-            _ if character == 3 => Key::CtrlC,
-            _ => char::from_u32(u32::from(character)).map_or(Key::Unknown, Key::Char),
+        Ok(translate_key(
+            event.bKeyDown != 0,
+            event.wVirtualKeyCode,
+            character,
+            event.dwControlKeyState,
+        ))
+    }
+
+    /// Converts one console key event into a viewer key.
+    ///
+    /// Precedence: key releases are ignored; character 3 is always Ctrl+C; keys
+    /// without a mapping or character (modifier-only and function keys) are ignored
+    /// without a redraw; left or right Alt without any Ctrl yields `Key::Unknown`, so
+    /// Alt+c and Alt+q never act as viewer commands; Ctrl+Alt (including AltGr, which
+    /// arrives as right Alt plus left Ctrl) keeps its typed character.
+    pub(super) fn translate_key(
+        key_down: bool,
+        virtual_key: u16,
+        character: u16,
+        control_state: u32,
+    ) -> Option<Key> {
+        if !key_down {
+            return None;
+        }
+        if character == 3 {
+            return Some(Key::CtrlC);
+        }
+        let navigation = match virtual_key {
+            0x26 => Some(Key::ArrowUp),
+            0x28 => Some(Key::ArrowDown),
+            0x21 => Some(Key::PageUp),
+            0x22 => Some(Key::PageDown),
+            0x24 => Some(Key::Home),
+            0x23 => Some(Key::End),
+            0x1b => Some(Key::Escape),
+            0x0d => Some(Key::Enter),
+            0x09 if control_state & SHIFT_PRESSED != 0 => Some(Key::BackTab),
+            0x09 => Some(Key::Tab),
+            _ => None,
         };
-        Ok(Some(key))
+        if navigation.is_none() && character == 0 {
+            return None;
+        }
+        let alt = control_state & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED) != 0;
+        let ctrl = control_state & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED) != 0;
+        if alt && !ctrl {
+            return Some(Key::Unknown);
+        }
+        Some(navigation.unwrap_or_else(|| {
+            char::from_u32(u32::from(character)).map_or(Key::Unknown, Key::Char)
+        }))
     }
 }
 
@@ -248,12 +291,9 @@ mod platform {
         };
         let key = match byte {
             3 => Key::CtrlC,
-            4 => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "Terminal input ended",
-                ));
-            }
+            // Raw mode delivers Ctrl+D as an ordinary byte; only poll/read report a
+            // closed terminal.
+            4 => Key::Unknown,
             b'\r' | b'\n' => Key::Enter,
             b'\t' => Key::Tab,
             0x1b => {
@@ -285,5 +325,124 @@ mod platform {
             _ => Key::Unknown,
         };
         Ok(Some(key))
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::platform::translate_key;
+    use console::Key;
+    use windows_sys::Win32::System::Console::{
+        LEFT_ALT_PRESSED, LEFT_CTRL_PRESSED, RIGHT_ALT_PRESSED, RIGHT_CTRL_PRESSED, SHIFT_PRESSED,
+    };
+
+    fn letter(character: char, state: u32) -> Option<Key> {
+        let virtual_key = character.to_ascii_uppercase() as u16;
+        translate_key(true, virtual_key, character as u16, state)
+    }
+
+    #[test]
+    fn releases_and_keys_without_characters_are_ignored() {
+        assert_eq!(translate_key(false, 0x43, u16::from(b'c'), 0), None);
+        assert_eq!(translate_key(false, 0x23, 0, 0), None);
+        // Shift, Ctrl, Alt, Caps Lock, and F1 pressed on their own.
+        for (virtual_key, state) in [
+            (0x10, SHIFT_PRESSED),
+            (0x11, LEFT_CTRL_PRESSED),
+            (0x12, LEFT_ALT_PRESSED),
+            (0x14, 0),
+            (0x70, 0),
+        ] {
+            assert_eq!(translate_key(true, virtual_key, 0, state), None);
+        }
+    }
+
+    #[test]
+    fn alt_without_ctrl_never_produces_viewer_commands() {
+        for alt in [LEFT_ALT_PRESSED, RIGHT_ALT_PRESSED] {
+            for character in ['c', 'q', 'y'] {
+                assert_eq!(letter(character, alt), Some(Key::Unknown));
+                assert_eq!(letter(character, alt | SHIFT_PRESSED), Some(Key::Unknown));
+            }
+            assert_eq!(translate_key(true, 0x23, 0, alt), Some(Key::Unknown));
+            assert_eq!(translate_key(true, 0x09, 9, alt), Some(Key::Unknown));
+        }
+    }
+
+    #[test]
+    fn ctrl_alt_and_altgr_keep_typed_characters() {
+        // AltGr arrives as right Alt plus left Ctrl; any Ctrl+Alt pair is treated alike.
+        for state in [
+            RIGHT_ALT_PRESSED | LEFT_CTRL_PRESSED,
+            LEFT_ALT_PRESSED | RIGHT_CTRL_PRESSED,
+            LEFT_ALT_PRESSED | LEFT_CTRL_PRESSED,
+            RIGHT_ALT_PRESSED | RIGHT_CTRL_PRESSED,
+        ] {
+            assert_eq!(
+                translate_key(true, 0x51, u16::from(b'@'), state),
+                Some(Key::Char('@'))
+            );
+            assert_eq!(
+                translate_key(true, 0x45, 0x20ac, state),
+                Some(Key::Char('\u{20ac}'))
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_c_shift_tab_and_plain_characters_are_preserved() {
+        for state in [
+            LEFT_CTRL_PRESSED,
+            RIGHT_CTRL_PRESSED,
+            LEFT_CTRL_PRESSED | LEFT_ALT_PRESSED,
+            LEFT_ALT_PRESSED,
+        ] {
+            assert_eq!(translate_key(true, 0x43, 3, state), Some(Key::CtrlC));
+        }
+        assert_eq!(translate_key(true, 0x09, 9, 0), Some(Key::Tab));
+        assert_eq!(
+            translate_key(true, 0x09, 9, SHIFT_PRESSED),
+            Some(Key::BackTab)
+        );
+        assert_eq!(translate_key(true, 0x23, 0, 0), Some(Key::End));
+        assert_eq!(translate_key(true, 0x1b, 0x1b, 0), Some(Key::Escape));
+        assert_eq!(letter('c', 0), Some(Key::Char('c')));
+        assert_eq!(letter('q', 0), Some(Key::Char('q')));
+        assert_eq!(letter('C', SHIFT_PRESSED), Some(Key::Char('C')));
+        assert_eq!(
+            translate_key(true, 0x44, 4, LEFT_CTRL_PRESSED),
+            Some(Key::Char('\x04'))
+        );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unix_tests {
+    use super::*;
+    use std::io::Write;
+    use std::os::fd::FromRawFd;
+
+    fn pipe() -> (File, File) {
+        let mut descriptors = [0; 2];
+        // pipe writes two new owned descriptors into the two-element array.
+        assert_eq!(unsafe { libc::pipe(descriptors.as_mut_ptr()) }, 0);
+        // Each descriptor is transferred to exactly one File.
+        unsafe {
+            (
+                File::from_raw_fd(descriptors[0]),
+                File::from_raw_fd(descriptors[1]),
+            )
+        }
+    }
+
+    #[test]
+    fn ctrl_d_is_an_ignored_key_but_a_closed_input_is_end_of_file() {
+        let (reader, mut writer) = pipe();
+        writer.write_all(b"\x04q").unwrap();
+        assert_eq!(platform::read_key(&reader).unwrap(), Some(Key::Unknown));
+        assert_eq!(platform::read_key(&reader).unwrap(), Some(Key::Char('q')));
+        drop(writer);
+        let error = platform::read_key(&reader).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
     }
 }
