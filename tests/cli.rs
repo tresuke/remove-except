@@ -1129,7 +1129,9 @@ fn pager_auto_falls_back_and_never_preserves_the_listing() {
 }
 
 #[test]
-fn explicit_always_without_a_terminal_fails_without_deletion() {
+// The viewer refuses redirected stdin when it would carry the confirmation answer.
+// The missing controlling terminal itself is covered by the Ubuntu PTY tests.
+fn explicit_always_with_redirected_confirmation_stdin_fails_without_deletion() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("remove.txt").write_str("remove").unwrap();
     let output = command_without_terminal()
@@ -1141,7 +1143,9 @@ fn explicit_always_without_a_terminal_fails_without_deletion() {
         .get_output()
         .clone();
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Cannot start the requested viewer"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Cannot start the requested viewer"));
+    assert!(stderr.contains("Standard input is redirected for confirmation"));
     temp.child("remove.txt").assert("remove");
 }
 

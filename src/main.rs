@@ -295,7 +295,11 @@ fn run(args: Args) -> Result<Outcome> {
             },
             warning: plan.direct_match_count() == 0,
         };
-        let available = if !args.patterns_from_stdin && !io::stdin().is_terminal() {
+        // Only a run that will read its confirmation from stdin keeps stdin away from
+        // the viewer; dry runs and plans without removals never read an answer.
+        let reads_confirmation_from_stdin =
+            !args.dry_run && !plan.delete_roots().is_empty() && !args.patterns_from_stdin;
+        let available = if reads_confirmation_from_stdin && !io::stdin().is_terminal() {
             Err(io::Error::other(
                 "Standard input is redirected for confirmation",
             ))
