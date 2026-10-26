@@ -12,21 +12,69 @@ This tool permanently deletes files and directories. Back up important data befo
 
 ## Installation
 
-The current `v0.2.4` release provides source code only. To install it from the tagged source, install Rust 1.88 or later and run:
+### Prebuilt Binaries
 
-```sh
-cargo install --git https://github.com/tresuke/remove-except --tag v0.2.4 --locked
+The following instructions are for `v0.3.0` once its [GitHub Release](https://github.com/tresuke/remove-except/releases) is published. Until then, its binaries and tag-based installation are not available. The published `v0.2.4` release provides source code only.
+
+After publication, download the archive for your platform and its matching checksum from the `v0.3.0` Release's **Assets**:
+
+| Platform | Archive | SHA-256 file |
+| --- | --- | --- |
+| Windows x64 (MSVC) | `remove-except-v0.3.0-x86_64-pc-windows-msvc.zip` | `remove-except-v0.3.0-x86_64-pc-windows-msvc.zip.sha256` |
+| Linux x64 (GNU) | `remove-except-v0.3.0-x86_64-unknown-linux-gnu.tar.gz` | `remove-except-v0.3.0-x86_64-unknown-linux-gnu.tar.gz.sha256` |
+
+The Linux binary is built in Ubuntu 22.04 and requires glibc 2.35 or later. Ubuntu is the supported Linux platform; the glibc requirement alone does not guarantee compatibility with other distributions. macOS, ARM64, and musl binaries are not included. Prebuilt binaries do not require a Rust toolchain.
+
+Before extracting or running the binary, verify the archive's SHA-256. On Windows, compare the hash from `Get-FileHash` with the first field in the checksum file (case-insensitive); do not continue if they differ:
+
+```powershell
+Get-FileHash .\remove-except-v0.3.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256
+Get-Content .\remove-except-v0.3.0-x86_64-pc-windows-msvc.zip.sha256
 ```
 
-You can also clone the repository and install from its top-level directory with `cargo install --path . --locked`.
+On Ubuntu, place the archive and checksum in the same directory and run:
 
-`v0.2.4` does not include `--patterns-from-stdin` and `--format json` (described in “Pipeline Integration”), exit codes `2` and `3`, line-based confirmation input, the built-in viewer (`--pager`), or the final-confirmation recap. After these changes have been merged to the default branch, you can use them before the next release by installing from that branch without `--tag`.
+```sh
+sha256sum --check remove-except-v0.3.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+```
 
-Prebuilt binaries and a crates.io package are not currently available. Future GitHub Releases may include Windows x64 and Linux x64 binaries. These binaries are planned to embed dependency information with [`cargo-auditable`](https://github.com/rust-secure-code/cargo-auditable), allowing scanners to identify dependency crate names and versions. Release archives are also planned to include GitHub Actions build provenance attestations. Neither embedded dependency data nor an attestation guarantees that a binary is safe. The Linux binary is built with Ubuntu 22.04 and requires glibc 2.35 or later. When a release includes binary assets, choose the archive matching your platform and verify it against the accompanying SHA-256 file. Verify its provenance with GitHub CLI:
+Also verify the archive's GitHub Actions build provenance with GitHub CLI, replacing `<archive-path>` with the downloaded archive's path:
 
 ```sh
 gh attestation verify <archive-path> --repo tresuke/remove-except --signer-workflow tresuke/remove-except/.github/workflows/prepare-release.yml
 ```
+
+The attestation is registered with GitHub, not supplied as a separate Release asset. Binaries embed dependency crate names and versions using [`cargo-auditable`](https://github.com/rust-secure-code/cargo-auditable); a separate SBOM file is not included. Neither embedded dependency data, a checksum, nor an attestation guarantees that a binary is safe.
+
+After verification, extract the archive:
+
+```powershell
+Expand-Archive -LiteralPath .\remove-except-v0.3.0-x86_64-pc-windows-msvc.zip -DestinationPath .\remove-except-v0.3.0
+```
+
+```sh
+tar -xzf remove-except-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
+```
+
+Each archive contains a platform-named directory with `remove-except.exe` (Windows) or `remove-except` (Ubuntu), both READMEs, and both project licenses. Add the directory containing the executable to `PATH`, then check `remove-except --version`.
+
+### Install from Source
+
+After `v0.3.0` is published, install Rust 1.88 or later and run:
+
+```sh
+cargo install --git https://github.com/tresuke/remove-except --tag v0.3.0 --locked
+```
+
+Before publication, use the merged default-branch source for the features documented here:
+
+```sh
+cargo install --git https://github.com/tresuke/remove-except --locked
+```
+
+You can also clone the repository and install from its top-level directory with `cargo install --path . --locked`. To install the older source-only release, use `--tag v0.2.4` instead; it does not include stdin patterns, JSON output, exit codes `2` and `3`, whole-line confirmation, the viewer, or the final-confirmation recap.
+
+A crates.io package is not provided. `cargo install remove-except` is not an available installation method.
 
 ## Quick Start
 
@@ -370,6 +418,14 @@ When reading JSON in PowerShell, also check that it is decoded as UTF-8. See “
 If an error occurs during deletion (exit code 1), items already deleted are not restored.
 
 ## Versioning and Compatibility
+
+### Upgrading from v0.2.4 to v0.3.0
+
+- Glob classification now includes braces (`{` and `}`) and, on Ubuntu, the backslash escape (`\`). These patterns no longer get literal-directory recursive retention. Previously retained descendants may become deletion targets: `reports/{2024,2025}` keeps the matching directories, not their contents; use `reports/{2024,2025}/**` to keep their descendants too. Review all items with `--dry-run` and without `--summary` after upgrading.
+- Confirmation now reads a whole line on every input path. Only `y` or `yes` followed by Enter confirms (case-insensitive, surrounding whitespace ignored); other answers and EOF cancel. Cancellation exits with code `3` rather than `0`; invalid arguments, stdin input, roots, and patterns exit with code `2`. Update scripts that depend on exit codes or single-key confirmation.
+- `--pager auto` adds a viewing step for long terminal output. Use `--pager never` for ordinary output. The viewer does not change keep/delete decisions or deletion order; `c` only finishes viewing, and Enter or `y` in the viewer never authorizes deletion. Final confirmation is separate, with a recap on stderr. With stdin patterns or after viewing, confirmation uses the controlling terminal, not stdin.
+- `--patterns-from-stdin` adds UTF-8 newline-delimited keep patterns; `--format json` adds the pre-deletion plan with `schema_version: 1`. Human output is not a stable machine-readable interface. Library callers can identify validation failures with the new `ValidationError` type.
+- The minimum Rust version remains 1.88. A plan is not a protected filesystem snapshot: files may change between preview and deletion. The no-match warning, root validation, and no-follow-symlinks behavior remain in effect; `--force` skips only confirmation.
 
 Updates may change which items are kept or deleted, or how deletion is confirmed. Even a patch update may change deletion results by fixing a bug. Review the changes when updating and inspect the targets with `--dry-run` before deleting.
 
