@@ -129,6 +129,22 @@ Verify that the tag points to a commit on `main` and matches the package version
 
 A tag push does not publish a release. Review the draft's source commit, generated notes, archives, checksums, and attestations before manually publishing it. Do not replace published contents under an existing version.
 
+### Post-publication README Synchronization Checklist
+
+After formal publication and verification of the public assets are complete, use this checklist for each release and record the results and links to any required documentation PRs in the release preparation PR. Conditional guidance is acceptable before publication; do not describe unpublished assets as available.
+
+- [ ] Treat `README.ja.md` as the source of truth and synchronize `README.md` in the same change.
+- [ ] Replace wording such as "available after publication" or "unavailable until publication" with the actual availability.
+- [ ] Verify direct links to the published Release, asset names, and tag-based installation instructions.
+- [ ] Distinguish the tag-based stable version from the development version installed from the default branch.
+- [ ] Confirm that distribution methods not yet provided are not described as available.
+- [ ] Merge any required documentation changes through a PR and verify the post-merge state. If the READMEs already match the published state, record that verification result.
+- [ ] Mark post-release work complete only after the above checks and any required synchronization are complete.
+
+Do not move published tags or replace published distribution archives to synchronize documentation. Documentation-only changes do not normally require a version bump or a new release.
+
+### Crate Distribution Validation
+
 Before preparing a crate distribution, inspect and validate the package:
 
 ```sh
