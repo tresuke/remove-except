@@ -12,21 +12,69 @@
 
 ## インストール
 
-現在の `v0.2.4` リリースはソースコードのみを提供します。タグ付きソースからインストールするには Rust 1.88 以降を用意して、次を実行します。
+### ビルド済みバイナリー
 
-```sh
-cargo install --git https://github.com/tresuke/remove-except --tag v0.2.4 --locked
+以下は、`v0.3.0` の [GitHub Release](https://github.com/tresuke/remove-except/releases) が公開された後の手順です。公開までは、そのバイナリーとタグ指定のインストールは利用できません。公開済みの `v0.2.4` リリースはソースコードのみを提供します。
+
+公開後、`v0.3.0` Release の **Assets** から、利用環境に合うアーカイブと対応するチェックサムを取得してください。
+
+| 対象 | アーカイブ | SHA-256 ファイル |
+| --- | --- | --- |
+| Windows x64（MSVC） | `remove-except-v0.3.0-x86_64-pc-windows-msvc.zip` | `remove-except-v0.3.0-x86_64-pc-windows-msvc.zip.sha256` |
+| Linux x64（GNU） | `remove-except-v0.3.0-x86_64-unknown-linux-gnu.tar.gz` | `remove-except-v0.3.0-x86_64-unknown-linux-gnu.tar.gz.sha256` |
+
+Linux版は Ubuntu 22.04 内でビルドし、glibc 2.35 以降が必要です。サポートする Linux 環境は Ubuntu であり、glibc の条件だけで他のディストリビューションとの互換性を保証するものではありません。macOS、ARM64、musl 向けバイナリーは含みません。ビルド済みバイナリーの利用に Rust toolchain は不要です。
+
+展開・実行前に、アーカイブの SHA-256 を確認してください。Windows では `Get-FileHash` のハッシュとチェックサムファイルの先頭の値を、大文字と小文字を区別せず比較します。一致しない場合は先へ進まないでください。
+
+```powershell
+Get-FileHash .\remove-except-v0.3.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256
+Get-Content .\remove-except-v0.3.0-x86_64-pc-windows-msvc.zip.sha256
 ```
 
-リポジトリーを clone した場合は、リポジトリー直下で `cargo install --path . --locked` を実行してインストールすることもできます。
+Ubuntu ではアーカイブとチェックサムを同じディレクトリーに置き、次を実行します。
 
-`v0.2.4` には、「パイプラインとの連携」で説明する `--patterns-from-stdin` と `--format json`、終了コード `2` と `3`、1行単位の確認入力、内蔵ビューアー（`--pager`）、最終確認前の要点再掲は含まれていません。これらの変更が既定ブランチにマージされた後であれば、次のリリース前でも `--tag` を付けずに既定ブランチからインストールして利用できます。
+```sh
+sha256sum --check remove-except-v0.3.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+```
 
-現在、ビルド済み実行ファイルと crates.io パッケージは提供していません。今後の GitHub Release では Windows x64 と Linux x64 の実行ファイルを添付する場合があります。これらの実行ファイルには、脆弱性スキャナーなどで依存 crate の名前とバージョンを確認できるよう、[`cargo-auditable`](https://github.com/rust-secure-code/cargo-auditable) で依存関係情報を埋め込む予定です。また、配布アーカイブには GitHub Actions のビルド来歴証明を付与する予定です。これは実行ファイルの安全性を保証するものではありません。Linux版は Ubuntu 22.04 でビルドし、glibc 2.35 以降が必要です。Release に実行ファイルが添付されている場合は、利用環境に合うアーカイブを選び、付属の SHA-256 ファイルで検証してください。来歴証明は GitHub CLI で次のように検証できます。
+GitHub Actions のビルド来歴証明も GitHub CLI で確認してください。`<archive-path>` は取得したアーカイブのパスに置き換えます。
 
 ```sh
 gh attestation verify <archive-path> --repo tresuke/remove-except --signer-workflow tresuke/remove-except/.github/workflows/prepare-release.yml
 ```
+
+来歴証明は GitHub に登録され、独立した Release アセットとしては添付されません。バイナリーには [`cargo-auditable`](https://github.com/rust-secure-code/cargo-auditable) で依存 crate の名前とバージョンを埋め込み、別の SBOM ファイルは添付しません。依存情報、チェックサム、来歴証明のいずれも、バイナリーの安全性そのものを保証するものではありません。
+
+検証後、アーカイブを展開します。
+
+```powershell
+Expand-Archive -LiteralPath .\remove-except-v0.3.0-x86_64-pc-windows-msvc.zip -DestinationPath .\remove-except-v0.3.0
+```
+
+```sh
+tar -xzf remove-except-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
+```
+
+各アーカイブには、対象名を含むディレクトリー内に `remove-except.exe`（Windows）または `remove-except`（Ubuntu）、両 README、両プロジェクトライセンスが入っています。実行ファイルがあるディレクトリーを `PATH` に追加し、`remove-except --version` で確認してください。
+
+### ソースからのインストール
+
+`v0.3.0` の公開後は、Rust 1.88 以降を用意して次を実行します。
+
+```sh
+cargo install --git https://github.com/tresuke/remove-except --tag v0.3.0 --locked
+```
+
+公開前にここで説明する機能を利用する場合は、マージ済みの既定ブランチのソースを使います。
+
+```sh
+cargo install --git https://github.com/tresuke/remove-except --locked
+```
+
+リポジトリーを clone した場合は、リポジトリー直下で `cargo install --path . --locked` を実行してインストールすることもできます。以前のソースのみのリリースを使う場合は、代わりに `--tag v0.2.4` を指定してください。stdin パターン、JSON 出力、終了コード `2` と `3`、1行単位の確認、ビューアー、最終確認前の要点再掲は含まれません。
+
+crates.io パッケージは提供していません。`cargo install remove-except` は利用できるインストール方法ではありません。
 
 ## クイックスタート
 
@@ -372,6 +420,14 @@ PowerShellでJSONを読み取る場合も、UTF-8として受け取る設定を�
 削除中にエラーが起きた場合（終了コード1）、それ以前に削除済みの項目は元に戻りません。
 
 ## バージョンと互換性
+
+### v0.2.4 から v0.3.0 への更新
+
+- glob の分類に波括弧（`{` と `}`）と、Ubuntu のバックスラッシュによるエスケープ（`\`）を含めるよう修正しました。これらのパターンでは、リテラルなディレクトリー指定による配下全体の保持を行いません。以前は保持されていた子孫が削除対象になる場合があります。`reports/{2024,2025}` は一致するディレクトリーだけを保持し、中身は保持しません。子孫も残す場合は `reports/{2024,2025}/**` を指定してください。更新後は `--summary` なしの `--dry-run` で全項目を確認してください。
+- 確認は全入力経路で1行単位になりました。`y` または `yes` を入力して Enter を押す場合だけ削除します（大文字と小文字は区別せず、前後の空白は無視）。その他の回答・EOF は中止です。中止の終了コードは `0` から `3` に変わり、引数・stdin 入力・処理対象ディレクトリー・パターンの不備は `2` です。終了コードや1キーでの確認に依存するスクリプトは見直してください。
+- `--pager auto` により、端末に収まらない一覧には閲覧段階が加わります。通常出力には `--pager never` を使います。ビューアーは保持・削除判定や削除順序を変えません。`c` は閲覧完了だけを意味し、閲覧中の Enter や `y` では削除しません。最終確認は別に行い、要点を標準エラーに再掲します。stdin パターンを使う場合と閲覧後の確認は、stdin ではなく制御端末から読み取ります。
+- `--patterns-from-stdin` で UTF-8 の改行区切り保持パターン、`--format json` で `schema_version: 1` の削除前計画を扱えるようになりました。人向け出力は安定した機械可読形式ではありません。ライブラリーでは、新しい `ValidationError` 型で入力検証エラーを識別できます。
+- 最低 Rust バージョンは引き続き 1.88 です。計画は保護されたファイルシステムのスナップショットではなく、プレビューから削除までの間にファイルが変わる可能性があります。保持一致なしの警告、処理対象ディレクトリーの検証、シンボリックリンクをたどらない動作は維持します。`--force` が省略するのは確認だけです。
 
 更新によって保持対象・削除対象や確認手順が変わる場合があります。Patch 更新でも、不具合修正によって削除結果が変わることがあります。更新時は変更内容を確認し、実行前に `--dry-run` で対象を確認してください。
 
