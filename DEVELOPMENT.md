@@ -129,6 +129,22 @@ Verify that the tag points to a commit on `main` and matches the package version
 
 A tag push does not publish a release. Review the draft's source commit, generated notes, archives, checksums, and attestations before manually publishing it. Do not replace published contents under an existing version.
 
+### Post-publication README Synchronization Checklist
+
+After formal publication and verification of the public distributions provided for that release are complete, check the READMEs against actual distribution availability for every release. The following checklist is a reusable template. Check the applicable scope, such as binaries, source, or crates, and record execution results and links to any required documentation PRs in that release's preparation PR. Conditional guidance is acceptable before publication; do not describe unpublished assets as available.
+
+- [ ] For necessary corrections, treat `README.ja.md` as the source of truth and synchronize `README.md` in the same change.
+- [ ] Replace wording such as "available after publication" or "unavailable until publication" with the actual availability.
+- [ ] Verify direct links to the published Release, asset names, and tag-based installation instructions.
+- [ ] Distinguish the tag-based stable version from the development version installed from the default branch.
+- [ ] Confirm that distribution methods not yet provided are not described as available.
+- [ ] Merge any required documentation changes through the normal PR process and verify the post-merge state. If the READMEs already match the published state, no change or documentation PR is required; record only the verification result.
+- [ ] Mark post-release work complete only after the above checks and any required synchronization are complete.
+
+Formal publication and completion of post-release work, including verification of post-publication guidance, are separate milestones. Do not move published tags or replace published distribution archives to synchronize documentation. Documentation-only changes do not normally require a version bump or a new release.
+
+### Crate Distribution Validation
+
 Before preparing a crate distribution, inspect and validate the package:
 
 ```sh
