@@ -14,9 +14,9 @@ This tool permanently deletes files and directories. Back up important data befo
 
 ### Prebuilt Binaries
 
-The following instructions are for `v0.3.0` once its [GitHub Release](https://github.com/tresuke/remove-except/releases) is published. Until then, its binaries and tag-based installation are not available. The published `v0.2.4` release provides source code only.
+The `v0.3.0` [GitHub Release](https://github.com/tresuke/remove-except/releases/tag/v0.3.0) provides prebuilt binaries for Windows x64 and Linux x64. The older `v0.2.4` release provides source code only.
 
-After publication, download the archive for your platform and its matching checksum from the `v0.3.0` Release's **Assets**:
+Download the archive for your platform and its matching checksum from that Release's **Assets**:
 
 | Platform | Archive | SHA-256 file |
 | --- | --- | --- |
@@ -60,13 +60,13 @@ Each archive contains a platform-named directory with `remove-except.exe` (Windo
 
 ### Install from Source
 
-After `v0.3.0` is published, install Rust 1.88 or later and run:
+Install Rust 1.88 or later, then install from the published `v0.3.0` tag:
 
 ```sh
 cargo install --git https://github.com/tresuke/remove-except --tag v0.3.0 --locked
 ```
 
-Before publication, use the merged default-branch source for the features documented here:
+To install the development version, omit the tag and use the latest default-branch source. It may differ from the published `v0.3.0` release:
 
 ```sh
 cargo install --git https://github.com/tresuke/remove-except --locked
