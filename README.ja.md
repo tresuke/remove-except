@@ -14,9 +14,9 @@
 
 ### ビルド済みバイナリー
 
-以下は、`v0.3.0` の [GitHub Release](https://github.com/tresuke/remove-except/releases) が公開された後の手順です。公開までは、そのバイナリーとタグ指定のインストールは利用できません。公開済みの `v0.2.4` リリースはソースコードのみを提供します。
+`v0.3.0` の [GitHub Release](https://github.com/tresuke/remove-except/releases/tag/v0.3.0) では、Windows x64／Linux x64 向けのビルド済みバイナリーを提供しています。以前の `v0.2.4` リリースはソースコードのみを提供します。
 
-公開後、`v0.3.0` Release の **Assets** から、利用環境に合うアーカイブと対応するチェックサムを取得してください。
+上記 Release の **Assets** から、利用環境に合うアーカイブと対応するチェックサムを取得してください。
 
 | 対象 | アーカイブ | SHA-256 ファイル |
 | --- | --- | --- |
@@ -60,13 +60,13 @@ tar -xzf remove-except-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
 
 ### ソースからのインストール
 
-`v0.3.0` の公開後は、Rust 1.88 以降を用意して次を実行します。
+Rust 1.88 以降を用意し、公開済みの `v0.3.0` タグを指定してインストールします。
 
 ```sh
 cargo install --git https://github.com/tresuke/remove-except --tag v0.3.0 --locked
 ```
 
-公開前にここで説明する機能を利用する場合は、マージ済みの既定ブランチのソースを使います。
+開発版を利用する場合は、タグを指定せず、既定ブランチの最新ソースからインストールします。公開済みの `v0.3.0` とは内容が異なる場合があります。
 
 ```sh
 cargo install --git https://github.com/tresuke/remove-except --locked
