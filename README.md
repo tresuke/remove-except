@@ -267,6 +267,8 @@ When a full path listing is shown, a legend appears after the processing-directo
 
 `--summary keep|delete|both` replaces selected sections with counts and no paths. Keep counts include required ancestors and separately report direct pattern matches. Deletion-item counts and the number of top-level deletion operations are distinct. Since summaries omit paths, review every item with `--dry-run` and without `--summary` before deleting.
 
+On a colored TTY, the summary `KEEP:` heading is bold green and `DELETE:` is bold red. Headings are unstyled when color is disabled.
+
 In the `human` format, kept items, deletion targets, and execution results are written to standard output. Warnings, errors, and confirmation prompts are written to standard error (see “JSON Output” for `--format json`). Human-readable output is not a stable format for parsing by other programs.
 
 ### Browsing Large Plans

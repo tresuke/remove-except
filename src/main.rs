@@ -875,8 +875,17 @@ fn print_item_section(
     };
 
     if summary_only {
-        let summary_title = if is_keep_section { "KEEP" } else { "DELETE" };
-        writeln!(output, "{summary_title}:")?;
+        let summary_title = if is_keep_section { "KEEP:" } else { "DELETE:" };
+        let summary_title = if options.colors_enabled {
+            if is_keep_section {
+                style(summary_title).green().bold().to_string()
+            } else {
+                style(summary_title).red().bold().to_string()
+            }
+        } else {
+            summary_title.to_owned()
+        };
+        writeln!(output, "{summary_title}")?;
         if is_keep_section {
             let item_label = if items.len() == 1 { "item" } else { "items" };
             let match_label = if options.direct_match_count == 1 {
@@ -1375,6 +1384,46 @@ mod tests {
         assert!(no_kept_parent_output.contains("Colors: directories ("));
         assert!(no_kept_parent_output.contains("kept parents ("));
         console::set_colors_enabled(colors_were_enabled);
+    }
+
+    #[test]
+    fn summary_section_titles_use_keep_and_delete_colors() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("keep.txt").write_str("keep").unwrap();
+        temp.child("remove.txt").write_str("remove").unwrap();
+        let plan = build_plan(temp.path(), &["keep.txt".to_owned()]).unwrap();
+
+        let render = |colors_enabled| {
+            let mut output = Vec::new();
+            render_plan(
+                &mut output,
+                &plan,
+                true,
+                false,
+                true,
+                true,
+                false,
+                false,
+                colors_enabled,
+            )
+            .unwrap();
+            String::from_utf8(output).unwrap()
+        };
+
+        let plain = render(false);
+        assert!(plain.contains("KEEP:\n"));
+        assert!(plain.contains("DELETE:\n"));
+        assert!(!plain.contains('\u{1b}'));
+
+        let _color_test_guard = COLOR_TEST_LOCK.lock().unwrap();
+        let colors_were_enabled = console::colors_enabled();
+        console::set_colors_enabled(true);
+        let colored = render(true);
+        console::set_colors_enabled(colors_were_enabled);
+
+        assert!(colored.contains("\u{1b}[32m\u{1b}[1mKEEP:\u{1b}[0m"));
+        assert!(colored.contains("\u{1b}[31m\u{1b}[1mDELETE:\u{1b}[0m"));
+        assert_eq!(console::strip_ansi_codes(&colored), plain);
     }
 
     #[test]
