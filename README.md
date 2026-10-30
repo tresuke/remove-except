@@ -225,7 +225,7 @@ A symbolic link supplied to `--root` is resolved to its target. Links under the 
 
 The default `--layout tree` shows kept items and deletion targets as a tree; `--layout flat` shows `ItemType` and `RelativePath` columns. Pattern matches and required ancestors are shown separately from deletion targets. See “Output and Options” for colors, markers, and sorting.
 
-In a normal run, the tool displays both lists before asking for confirmation. Sections selected by `--summary` show counts instead of path lists. The answer is read as a whole line: `y` or `yes` (case-insensitive, ignoring surrounding whitespace) deletes. `n`, an empty Enter, any other answer, or end of input (EOF) cancels. The default is No; cancellation exits with code 3. `--force` skips only this prompt; invalid patterns or an invalid processing directory still produce an error.
+In a normal run, the tool displays both lists before asking for confirmation. Sections selected by `--summary` show counts instead of path lists. Only a newline-terminated whole-line answer of `y` or `yes` (case-insensitive, ignoring surrounding whitespace) deletes. An empty Enter, an unterminated answer at EOF, any other answer, or EOF cancels. The default is No; cancellation exits with code 3. `--force` skips only this prompt; invalid patterns or an invalid processing directory still produce an error.
 
 If none of the supplied keep patterns matches any item, a warning is shown and everything under the processing directory becomes a deletion target.
 
@@ -421,10 +421,14 @@ If an error occurs during deletion (exit code 1), items already deleted are not 
 
 ## Versioning and Compatibility
 
+### Confirmation Fix Planned for the Next Release
+
+- Fix deletion on an unterminated `y` / `yes` at EOF. The v0.3.0 documentation described Enter to confirm and EOF to cancel, but the distributed implementation also accepted unterminated affirmative answers. Every input path will now require a newline-terminated affirmative line; otherwise, nothing is deleted and the command cancels with exit code 3.
+
 ### Upgrading from v0.2.4 to v0.3.0
 
 - Glob classification now includes braces (`{` and `}`) and, on Ubuntu, the backslash escape (`\`). These patterns no longer get literal-directory recursive retention. Previously retained descendants may become deletion targets: `reports/{2024,2025}` keeps the matching directories, not their contents; use `reports/{2024,2025}/**` to keep their descendants too. Review all items with `--dry-run` and without `--summary` after upgrading.
-- Confirmation now reads a whole line on every input path. Only `y` or `yes` followed by Enter confirms (case-insensitive, surrounding whitespace ignored); other answers and EOF cancel. Cancellation exits with code `3` rather than `0`; invalid arguments, stdin input, roots, and patterns exit with code `2`. Update scripts that depend on exit codes or single-key confirmation.
+- Confirmation was unified to read a whole line on every input path, normally using `y` or `yes` followed by Enter (case-insensitive, surrounding whitespace ignored). However, the distributed implementation also accepted unterminated affirmative answers; see "Confirmation Fix Planned for the Next Release" above. Cancellation exits with code `3` rather than `0`; invalid arguments, stdin input, roots, and patterns exit with code `2`. Update scripts that depend on exit codes or single-key confirmation.
 - `--pager auto` adds a viewing step for long terminal output. Use `--pager never` for ordinary output. The viewer does not change keep/delete decisions or deletion order; `c` only finishes viewing, and Enter or `y` in the viewer never authorizes deletion. Final confirmation is separate, with a recap on stderr. With stdin patterns or after viewing, confirmation uses the controlling terminal, not stdin.
 - `--patterns-from-stdin` adds UTF-8 newline-delimited keep patterns; `--format json` adds the pre-deletion plan with `schema_version: 1`. Human output is not a stable machine-readable interface. Library callers can identify validation failures with the new `ValidationError` type.
 - The minimum Rust version remains 1.88. A plan is not a protected filesystem snapshot: files may change between preview and deletion. The no-match warning, root validation, and no-follow-symlinks behavior remain in effect; `--force` skips only confirmation.
