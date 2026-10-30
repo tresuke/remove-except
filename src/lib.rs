@@ -25,7 +25,9 @@
 //! is kept if it matches **any** pattern (logical OR):
 //!
 //! - `*` matches any sequence of non-separator characters within a single directory component.
-//! - `?` matches any single non-separator character.
+//! - `?` matches one Unicode scalar value other than a separator. A character class also
+//!   matches one Unicode scalar value; combining sequences can therefore require multiple
+//!   wildcards.
 //! - `**` matches zero or more directory levels.
 //! - `[...]` matches any character in the character class, adhering to standard glob rules.
 //! - `{a,b}` matches any of the comma-separated alternatives.
@@ -108,10 +110,10 @@ use pattern::compile_patterns;
 ///   drive-relative paths (e.g. `C:foo`) are rejected.
 /// * `patterns` - One or more keep patterns. Patterns may be literal relative paths or glob
 ///   patterns (`*`, `?`, `**`, `[...]`, `{a,b}`; on non-Windows platforms `\` escapes the
-///   next character). Literal directories without glob syntax match recursively; glob
-///   matches do not keep unmatched descendants. Relative patterns are resolved relative to
-///   `root`. Patterns containing a `..` component are rejected. Leading and trailing
-///   whitespace is preserved.
+///   next character). `?` and a character class each match one Unicode scalar value.
+///   Literal directories without glob syntax match recursively; glob matches do not keep
+///   unmatched descendants. Relative patterns are resolved relative to `root`. Patterns
+///   containing a `..` component are rejected. Leading and trailing whitespace is preserved.
 ///
 /// # Safety and Behavior
 ///
