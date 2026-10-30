@@ -990,6 +990,8 @@ fn confirmation_declines_answers_other_than_y_or_yes() {
     for answer in [
         &b"maybe\n"[..],
         b"yes please\n",
+        b"y",
+        b"yes",
         b"\x82\xcd\x82\xa2\r\n",
         b"",
     ] {
