@@ -134,6 +134,28 @@ enum SummarySection {
     Both,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SectionKind {
+    Keep,
+    Delete,
+}
+
+impl SectionKind {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Keep => "Items to keep",
+            Self::Delete => "Items to delete",
+        }
+    }
+
+    fn summary_title(self) -> &'static str {
+        match self {
+            Self::Keep => "KEEP:",
+            Self::Delete => "DELETE:",
+        }
+    }
+}
+
 struct PlanDisplayOptions {
     flat: bool,
     sort_by_type: bool,
@@ -789,7 +811,7 @@ fn render_plan(
     let keep_line = output.lines;
     print_item_section(
         &mut output,
-        "Items to keep",
+        SectionKind::Keep,
         plan.keep_items(),
         keep_summary,
         &options,
@@ -799,7 +821,7 @@ fn render_plan(
     let delete_line = output.lines;
     print_item_section(
         &mut output,
-        "Items to delete",
+        SectionKind::Delete,
         plan.delete_items(),
         delete_summary,
         &options,
@@ -858,60 +880,55 @@ fn print_legend(output: &mut impl Write, flat: bool, colors_enabled: bool) -> io
 
 fn print_item_section(
     output: &mut impl Write,
-    title: &str,
+    section: SectionKind,
     items: &[PlannedItem],
     summary_only: bool,
     options: &PlanDisplayOptions,
 ) -> io::Result<()> {
-    let is_keep_section = title == "Items to keep";
-    let title = if options.colors_enabled {
-        if is_keep_section {
-            style(title).green().bold().to_string()
-        } else {
-            style(title).red().bold().to_string()
-        }
-    } else {
-        title.to_owned()
+    let title = section.title();
+    let title = match (section, options.colors_enabled) {
+        (SectionKind::Keep, true) => style(title).green().bold().to_string(),
+        (SectionKind::Delete, true) => style(title).red().bold().to_string(),
+        (_, false) => title.to_owned(),
     };
 
     if summary_only {
-        let summary_title = if is_keep_section { "KEEP:" } else { "DELETE:" };
-        let summary_title = if options.colors_enabled {
-            if is_keep_section {
-                style(summary_title).green().bold().to_string()
-            } else {
-                style(summary_title).red().bold().to_string()
-            }
-        } else {
-            summary_title.to_owned()
+        let summary_title = section.summary_title();
+        let summary_title = match (section, options.colors_enabled) {
+            (SectionKind::Keep, true) => style(summary_title).green().bold().to_string(),
+            (SectionKind::Delete, true) => style(summary_title).red().bold().to_string(),
+            (_, false) => summary_title.to_owned(),
         };
         writeln!(output, "{summary_title}")?;
-        if is_keep_section {
-            let item_label = if items.len() == 1 { "item" } else { "items" };
-            let match_label = if options.direct_match_count == 1 {
-                "match"
-            } else {
-                "matches"
-            };
-            writeln!(
-                output,
-                "  {} kept {item_label} (including required ancestors); {} direct pattern {match_label}",
-                items.len(),
-                options.direct_match_count
-            )?;
-        } else {
-            let item_label = if items.len() == 1 { "item" } else { "items" };
-            let operation_label = if options.delete_root_count == 1 {
-                "operation"
-            } else {
-                "operations"
-            };
-            writeln!(
-                output,
-                "  {} deletion {item_label}; {} top-level deletion {operation_label}",
-                items.len(),
-                options.delete_root_count
-            )?;
+        match section {
+            SectionKind::Keep => {
+                let item_label = if items.len() == 1 { "item" } else { "items" };
+                let match_label = if options.direct_match_count == 1 {
+                    "match"
+                } else {
+                    "matches"
+                };
+                writeln!(
+                    output,
+                    "  {} kept {item_label} (including required ancestors); {} direct pattern {match_label}",
+                    items.len(),
+                    options.direct_match_count
+                )?;
+            }
+            SectionKind::Delete => {
+                let item_label = if items.len() == 1 { "item" } else { "items" };
+                let operation_label = if options.delete_root_count == 1 {
+                    "operation"
+                } else {
+                    "operations"
+                };
+                writeln!(
+                    output,
+                    "  {} deletion {item_label}; {} top-level deletion {operation_label}",
+                    items.len(),
+                    options.delete_root_count
+                )?;
+            }
         }
         return Ok(());
     }
@@ -1262,7 +1279,7 @@ mod tests {
         let mut output = Vec::new();
         super::print_item_section(
             &mut output,
-            "Items to delete",
+            super::SectionKind::Delete,
             plan.delete_items(),
             false,
             &options,
