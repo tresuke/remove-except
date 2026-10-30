@@ -1,6 +1,8 @@
 use assert_cmd::Command;
 use assert_fs::prelude::*;
 
+mod support;
+
 #[cfg(unix)]
 #[path = "cli/pager_pty.rs"]
 mod pager_pty;
@@ -1594,6 +1596,210 @@ fn json_rejects_display_options() {
             .assert()
             .code(2);
     }
+}
+
+#[test]
+fn non_unicode_entries_fail_before_output_and_deletion() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+    temp.child("nested").create_dir_all().unwrap();
+    let first = temp
+        .path()
+        .join("nested")
+        .join(support::non_unicode_name(0xff));
+    let second = temp
+        .path()
+        .join("nested")
+        .join(support::non_unicode_name(0xfe));
+    std::fs::write(&first, "first").unwrap();
+    std::fs::write(&second, "second").unwrap();
+
+    for display in [
+        [].as_slice(),
+        ["--layout", "tree"].as_slice(),
+        ["--layout", "flat"].as_slice(),
+        ["--layout", "flat", "--sort-by-type"].as_slice(),
+        ["--summary", "keep"].as_slice(),
+        ["--summary", "delete"].as_slice(),
+        ["--summary", "both"].as_slice(),
+        ["--format", "json"].as_slice(),
+    ] {
+        for mode in [None, Some("--dry-run"), Some("--force")] {
+            for pattern in ["keep.txt", ".", "nested/bad-\u{fffd}.txt"] {
+                let output = Command::cargo_bin("remove-except")
+                    .unwrap()
+                    .current_dir(temp.path())
+                    .args(display)
+                    .args(mode)
+                    .arg(pattern)
+                    .write_stdin("yes\n")
+                    .timeout(std::time::Duration::from_secs(10))
+                    .assert()
+                    .code(1)
+                    .get_output()
+                    .clone();
+
+                assert!(
+                    output.stdout.is_empty(),
+                    "display: {display:?}, mode: {mode:?}"
+                );
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(stderr.contains("cannot be represented as Unicode"));
+                assert!(!stderr.contains("[y/N]"));
+                temp.child("keep.txt").assert("keep");
+                temp.child("remove.txt").assert("remove");
+                assert_eq!(std::fs::read(&first).unwrap(), b"first");
+                assert_eq!(std::fs::read(&second).unwrap(), b"second");
+            }
+        }
+    }
+    for options in [
+        ["--pager", "always"].as_slice(),
+        ["--pager", "never"].as_slice(),
+        ["--dry-run", "--pager", "always"].as_slice(),
+        ["--patterns-from-stdin"].as_slice(),
+        ["--patterns-from-stdin", "--force"].as_slice(),
+    ] {
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(options)
+            .arg("keep.txt")
+            .write_stdin(".\n")
+            .timeout(std::time::Duration::from_secs(10))
+            .assert()
+            .code(1)
+            .get_output()
+            .clone();
+        assert!(output.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("cannot be represented as Unicode")
+        );
+        temp.child("remove.txt").assert("remove");
+        assert_eq!(std::fs::read(&first).unwrap(), b"first");
+        assert_eq!(std::fs::read(&second).unwrap(), b"second");
+    }
+}
+
+#[test]
+fn unicode_paths_remain_lossless_in_json() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let root = temp.child("root-\u{fffd}");
+    root.create_dir_all().unwrap();
+    let mut names = vec!["bad-\u{fffd}.txt", "bad-é.txt"];
+    #[cfg(unix)]
+    names.extend(["line\nbreak.txt", r"back\slash.txt"]);
+    for name in &names {
+        root.child(name).write_str(name).unwrap();
+    }
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(root.path())
+        .args(["--dry-run", "--format", "json", "."])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let plan = parse_json_stdout(&output);
+    names.sort_unstable();
+    assert_eq!(relative_paths(&plan, "keep_items"), names);
+    assert!(relative_paths(&plan, "delete_items").is_empty());
+    assert_eq!(plan["direct_match_count"], names.len());
+    assert_eq!(
+        plan["root"],
+        std::fs::canonicalize(root.path())
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
+    for name in names {
+        root.child(name).assert(name);
+    }
+}
+
+#[test]
+fn non_unicode_roots_fail_before_output_and_deletion() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let root = temp.path().join(support::non_unicode_name(0xff));
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("remove.txt"), "remove").unwrap();
+
+    for explicit_root in [true, false] {
+        for format in ["human", "json"] {
+            for mode in [None, Some("--dry-run"), Some("--force")] {
+                let mut command = Command::cargo_bin("remove-except").unwrap();
+                if explicit_root {
+                    command.current_dir(temp.path()).arg("--root").arg(&root);
+                } else {
+                    command.current_dir(&root);
+                }
+                let output = command
+                    .args(["--format", format])
+                    .args(mode)
+                    .arg("missing")
+                    .write_stdin("yes\n")
+                    .timeout(std::time::Duration::from_secs(10))
+                    .assert()
+                    .code(1)
+                    .get_output()
+                    .clone();
+                assert!(output.stdout.is_empty());
+                assert!(
+                    String::from_utf8_lossy(&output.stderr)
+                        .contains("cannot be represented as Unicode")
+                );
+                assert_eq!(std::fs::read(root.join("remove.txt")).unwrap(), b"remove");
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn non_unicode_link_names_and_resolved_roots_are_rejected() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let target = assert_fs::TempDir::new().unwrap();
+    let invalid_root = target.path().join(support::non_unicode_name(0xff));
+    std::fs::create_dir(&invalid_root).unwrap();
+    std::fs::write(invalid_root.join("outside.txt"), "outside").unwrap();
+    let link = temp.path().join("link");
+    std::os::unix::fs::symlink(&invalid_root, &link).unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .arg("--root")
+        .arg(&link)
+        .args(["--force", "."])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be represented as Unicode"));
+
+    let invalid_link = temp.path().join(support::non_unicode_name(0xfe));
+    std::os::unix::fs::symlink(target.path().join("missing"), &invalid_link).unwrap();
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "."])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be represented as Unicode"));
+    assert!(
+        std::fs::symlink_metadata(invalid_link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::read(invalid_root.join("outside.txt")).unwrap(),
+        b"outside"
+    );
 }
 
 #[cfg(unix)]

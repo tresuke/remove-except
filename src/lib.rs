@@ -18,6 +18,8 @@
 //! - **No Symlink Traversal**: Symbolic links encountered beneath the root are never followed.
 //!   Each link is evaluated as an individual leaf item; if targeted for deletion, only the
 //!   symbolic link itself is deleted, never its target.
+//! - **Unambiguous Paths**: The normalized root and every scanned entry path must be
+//!   representable as Unicode. Otherwise, planning fails without returning a partial plan.
 //!
 //! # Pattern Matching Syntax and Semantics
 //!
@@ -92,7 +94,7 @@ mod pattern;
 pub use error::ValidationError;
 use error::{invalid, invalid_with_source};
 pub use model::{ItemType, PlannedItem, RemovalPlan};
-use path::{display_path, is_drive_relative_path, is_filesystem_root};
+use path::{display_path, ensure_unicode_path, is_drive_relative_path, is_filesystem_root};
 use pattern::compile_patterns;
 
 /// Scans beneath the specified root directory and constructs a [`RemovalPlan`].
@@ -120,6 +122,9 @@ use pattern::compile_patterns;
 /// - **No Symlink Traversal**: Symbolic links beneath `root` are treated as individual leaf
 ///   items and are never followed.
 /// - **Root Exclusion**: The `root` directory itself is never included in the plan.
+/// - **Unicode Paths**: The normalized root and every scanned entry path must be
+///   representable as Unicode, regardless of whether an entry would be kept or deleted.
+///   Link targets beneath `root` are not checked because those links are not followed.
 /// - **Snapshot Semantics**: The returned plan represents a snapshot captured at scan time.
 ///   Filesystem modifications occurring after plan construction are not automatically reflected.
 ///
@@ -133,9 +138,11 @@ use pattern::compile_patterns;
 /// - **Root errors**: `root` cannot be resolved, is not a directory, is a filesystem root,
 ///   or is a Windows drive-relative path.
 /// - **I/O errors**: Directory traversal fails due to filesystem permissions or I/O errors.
+/// - **Path encoding errors**: The normalized root or a scanned entry path cannot be
+///   represented as Unicode. No partial plan is returned, even if all entries would be kept.
 ///
-/// Pattern and root errors carry a [`ValidationError`] that can be detected with
-/// [`anyhow::Error::downcast_ref`]. Traversal errors do not.
+/// Pattern and root validation errors carry a [`ValidationError`] that can be detected with
+/// [`anyhow::Error::downcast_ref`]. Traversal and path encoding errors do not.
 ///
 /// # Examples
 ///
@@ -188,6 +195,7 @@ pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
         )));
     }
 
+    ensure_unicode_path(&root)?;
     let compiled_patterns = compile_patterns(&root, patterns)?;
     let mut entries = Vec::new();
     // WalkDir yields entries depth-first, so retain indices of the current item's ancestors.
@@ -202,6 +210,7 @@ pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
         let parent_index = directory_stack.last().copied();
         let file_type = entry.file_type();
         let path = entry.path().to_path_buf();
+        ensure_unicode_path(&path)?;
         let relative = path
             .strip_prefix(&root)
             .context("Walked path escaped the root directory")?;
