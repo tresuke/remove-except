@@ -225,6 +225,8 @@ Windows uses the tool's Unicode simple case folding (non-Turkic); Ubuntu is case
 
 A symbolic link supplied to `--root` is resolved to its target. Links under the processing directory are not followed and are treated as individual items. If a link is a deletion target, only the link is removed, not its target.
 
+The normalized processing directory and every scanned entry path must be representable as Unicode. Names containing invalid UTF-8 on Ubuntu or unpaired surrogates on Windows stop planning with exit code 1 before any stdout output or deletion. This includes entries that would be kept and applies to human/JSON, Tree/Flat, `--summary`, `--dry-run`, and `--force`. Targets of child symbolic links are not checked. Names containing a valid Unicode replacement character `�` (U+FFFD) remain accepted.
+
 ### Display and Execution
 
 The default `--layout tree` shows kept items and deletion targets as a tree; `--layout flat` shows `ItemType` and `RelativePath` columns. Pattern matches and required ancestors are shown separately from deletion targets. See “Output and Options” for colors, markers, and sorting.
@@ -417,13 +419,17 @@ When reading JSON in PowerShell, also check that it is decoded as UTF-8. See “
 | Exit code | Meaning |
 | --- | --- |
 | `0` | The plan was shown, or deletion completed (including when there was nothing to delete). |
-| `1` | Runtime error, such as a scan or deletion failure, a path that cannot be represented in JSON, failure to start an explicitly requested viewer, or a terminal error during viewing. |
+| `1` | Runtime error, such as a scan or deletion failure, a non-Unicode path, failure to start an explicitly requested viewer, or a terminal error during viewing. |
 | `2` | Invalid arguments, standard input, processing directory, or patterns. |
 | `3` | Nothing was deleted because viewing or confirmation was cancelled, or no terminal was available to confirm. |
 
 If an error occurs during deletion (exit code 1), items already deleted are not restored.
 
 ## Versioning and Compatibility
+
+### Compatibility Change Planned for the Next Release
+
+- Non-Unicode path rejection now also applies to human output and the public API, not just JSON. In v0.3.0, human display and matching could collapse different names into the same replacement string. Planning now fails instead of producing an ambiguous preview or keep decision. Library function `build_plan` returns no plan and reports a runtime error without `ValidationError`. This is a compatibility change: inputs that previously succeeded may now fail. Keep/delete rules for Unicode paths, public API types, and JSON `schema_version` are unchanged.
 
 ### Confirmation Fix Planned for the Next Release
 

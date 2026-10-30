@@ -1,6 +1,106 @@
 use assert_fs::prelude::*;
 use remove_except::{ItemType, ValidationError, build_plan};
 
+mod support;
+
+#[test]
+fn non_unicode_entries_are_runtime_errors_without_mutation() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("nested").create_dir_all().unwrap();
+    let first = temp
+        .path()
+        .join("nested")
+        .join(support::non_unicode_name(0xff));
+    let second = temp
+        .path()
+        .join("nested")
+        .join(support::non_unicode_name(0xfe));
+    std::fs::write(&first, "first").unwrap();
+    std::fs::create_dir(&second).unwrap();
+    std::fs::write(second.join("child.txt"), "child").unwrap();
+
+    for pattern in ["keep.txt", ".", "nested/bad-\u{fffd}.txt"] {
+        let error = build_plan(temp.path(), &[pattern.to_owned()]).unwrap_err();
+        assert!(error.downcast_ref::<ValidationError>().is_none());
+        assert!(
+            error
+                .to_string()
+                .contains("cannot be represented as Unicode")
+        );
+        assert_eq!(std::fs::read(&first).unwrap(), b"first");
+        assert_eq!(std::fs::read(second.join("child.txt")).unwrap(), b"child");
+    }
+}
+
+#[test]
+fn non_unicode_roots_are_runtime_errors_even_when_empty() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let root = temp.path().join(support::non_unicode_name(0xff));
+    std::fs::create_dir(&root).unwrap();
+
+    let error = build_plan(&root, &[".".to_owned()]).unwrap_err();
+    assert!(error.downcast_ref::<ValidationError>().is_none());
+    assert!(
+        error
+            .to_string()
+            .contains("cannot be represented as Unicode")
+    );
+    assert!(root.is_dir());
+    assert_eq!(std::fs::read_dir(root).unwrap().count(), 0);
+}
+
+#[test]
+fn valid_unicode_replacement_characters_remain_distinct_paths() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let root = temp.child("root-\u{fffd}");
+    root.child("bad-\u{fffd}.txt")
+        .write_str("replacement")
+        .unwrap();
+    root.child("bad-é.txt").write_str("accent").unwrap();
+
+    let plan = build_plan(root.path(), &["bad-\u{fffd}.txt".to_owned()]).unwrap();
+    assert_eq!(plan.direct_match_count(), 1);
+    assert_eq!(plan.keep_items().len(), 1);
+    assert_eq!(plan.keep_items()[0].relative_path(), "bad-\u{fffd}.txt");
+    assert_eq!(plan.delete_items().len(), 1);
+    assert_eq!(plan.delete_items()[0].relative_path(), "bad-é.txt");
+    root.child("bad-\u{fffd}.txt").assert("replacement");
+    root.child("bad-é.txt").assert("accent");
+}
+
+#[cfg(unix)]
+#[test]
+fn unicode_links_do_not_require_unicode_targets() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let outside = assert_fs::TempDir::new().unwrap();
+    let target = outside.path().join(support::non_unicode_name(0xff));
+    std::fs::create_dir(&target).unwrap();
+    std::fs::write(target.join(support::non_unicode_name(0xfe)), "outside").unwrap();
+    std::os::unix::fs::symlink(&target, temp.path().join("link")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join(support::non_unicode_name(0xfd)),
+        temp.path().join("dangling"),
+    )
+    .unwrap();
+
+    let plan = build_plan(temp.path(), &["link".to_owned()]).unwrap();
+    assert_eq!(plan.keep_items().len(), 1);
+    assert_eq!(plan.keep_items()[0].item_type(), ItemType::Symlink);
+    assert_eq!(plan.delete_items().len(), 1);
+    assert_eq!(plan.delete_items()[0].relative_path(), "dangling");
+    assert_eq!(
+        std::fs::read(target.join(support::non_unicode_name(0xfe))).unwrap(),
+        b"outside"
+    );
+    let alias = outside.path().join(support::non_unicode_name(0xfc));
+    std::os::unix::fs::symlink(temp.path(), &alias).unwrap();
+    let aliased_plan = build_plan(&alias, &["link".to_owned()]).unwrap();
+    assert_eq!(
+        aliased_plan.root(),
+        std::fs::canonicalize(temp.path()).unwrap()
+    );
+}
+
 #[test]
 fn public_getters_describe_a_non_mutating_removal_plan() {
     let temp = assert_fs::TempDir::new().unwrap();

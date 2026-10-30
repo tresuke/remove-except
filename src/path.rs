@@ -1,3 +1,4 @@
+use anyhow::{Result, bail};
 use std::path::{Component, Path};
 #[cfg(windows)]
 use unicode_casefold::{Locale, UnicodeCaseFold, Variant};
@@ -79,6 +80,13 @@ pub(super) fn is_drive_relative_path(path: &str) -> bool {
 pub(super) fn is_filesystem_root(path: &Path) -> bool {
     path.components()
         .all(|component| !matches!(component, Component::Normal(_)))
+}
+
+pub(super) fn ensure_unicode_path(path: &Path) -> Result<()> {
+    if path.to_str().is_none() {
+        bail!("Path cannot be represented as Unicode; no plan was created: {path:?}");
+    }
+    Ok(())
 }
 
 /// Formats a relative path for display with platform-independent `/` separators.
