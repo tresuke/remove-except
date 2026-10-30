@@ -532,6 +532,39 @@ fn default_display_sorts_by_relative_path_and_marks_kept_parents_without_root_ta
 }
 
 #[test]
+// Verify tree ordering keeps each directory subtree contiguous when sibling names share prefixes.
+fn tree_display_groups_directory_subtrees_before_prefix_siblings() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("a/child.txt").write_str("remove").unwrap();
+    temp.child("a.txt").write_str("remove").unwrap();
+    temp.child("a-b.txt").write_str("remove").unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let output = String::from_utf8_lossy(&output);
+    let tree = output.split("Items to delete (4):\n").nth(1).unwrap();
+    let directory = tree.find("├── a/").unwrap();
+    let child = tree.find("│   └── child.txt").unwrap();
+    let hyphen_sibling = tree.find("├── a-b.txt").unwrap();
+    let dot_sibling = tree.find("└── a.txt").unwrap();
+    assert!(directory < child && child < hyphen_sibling && hyphen_sibling < dot_sibling);
+    assert_eq!(tree.matches("a/").count(), 1);
+    assert!(!tree.contains("a/+"));
+    temp.child("a/child.txt").assert("remove");
+    temp.child("a.txt").assert("remove");
+    temp.child("a-b.txt").assert("remove");
+}
+
+#[test]
 // Verify --layout flat displays relative paths instead of a tree.
 fn flat_option_displays_relative_paths_instead_of_a_tree() {
     let temp = assert_fs::TempDir::new().unwrap();

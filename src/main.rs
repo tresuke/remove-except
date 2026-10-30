@@ -951,8 +951,11 @@ fn print_item_section(
         }
     } else {
         let mut ordered_items: Vec<_> = items.iter().collect();
-        ordered_items
-            .sort_unstable_by(|left, right| left.relative_path().cmp(right.relative_path()));
+        ordered_items.sort_unstable_by(|left, right| {
+            left.relative_path()
+                .split('/')
+                .cmp(right.relative_path().split('/'))
+        });
         print_tree_items(output, &ordered_items, "", "", options.colors_enabled)?;
     }
     Ok(())

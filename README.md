@@ -251,7 +251,7 @@ For human-readable output, ordinary Windows drive and UNC paths omit the `\\?\` 
 | Tree (default) | Directories blue, symbolic links cyan, retained parents that appear only in the deletion list green | `/` for directories, `@` for symbolic links, `+` for retained parents |
 | Flat | `ItemType` and `RelativePath` columns; directories blue, symbolic links cyan, files uncolored | `/` on directory paths, `@` on symbolic-link paths, no file marker |
 
-Every entry in the deletion list is a deletion target; top-level deletion items are not marked separately. Flat layout has no retained-parent color or marker. `--sort-by-type` requires `--layout flat` and sorts by Directory, File, then Symlink, with relative-path order within each type. Without type sorting, items are displayed in relative-path order. Sorting affects display only, not the displayed lists or deletion order.
+Every entry in the deletion list is a deletion target; top-level deletion items are not marked separately. Flat layout has no retained-parent color or marker. Tree layout sorts each directory's immediate children by name and displays each directory subtree contiguously. Flat layout without type sorting uses relative-path order. `--sort-by-type` requires `--layout flat` and sorts by Directory, File, then Symlink, with relative-path order within each type. These display orders do not change the plan or deletion order.
 
 Examples:
 
