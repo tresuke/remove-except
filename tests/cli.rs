@@ -532,6 +532,125 @@ fn default_display_sorts_by_relative_path_and_marks_kept_parents_without_root_ta
 }
 
 #[test]
+// Verify tree ordering keeps each directory subtree contiguous when sibling names share prefixes.
+fn tree_display_groups_directory_subtrees_before_prefix_siblings() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("a/child.txt").write_str("remove").unwrap();
+    temp.child("a.txt").write_str("remove").unwrap();
+    temp.child("a-b.txt").write_str("remove").unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let output = String::from_utf8_lossy(&output);
+    let tree = output.split("Items to delete (4):\n").nth(1).unwrap();
+    let directory = tree.find("├── a/").unwrap();
+    let child = tree.find("│   └── child.txt").unwrap();
+    let hyphen_sibling = tree.find("├── a-b.txt").unwrap();
+    let dot_sibling = tree.find("└── a.txt").unwrap();
+    assert!(directory < child && child < hyphen_sibling && hyphen_sibling < dot_sibling);
+    assert_eq!(tree.matches("a/").count(), 1);
+    assert!(!tree.contains("a/+"));
+    temp.child("a/child.txt").assert("remove");
+    temp.child("a.txt").assert("remove");
+    temp.child("a-b.txt").assert("remove");
+}
+
+#[test]
+fn tree_display_groups_kept_parents_and_preserves_flat_and_json_order() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    for (name, content) in [
+        ("a/keep.txt", "keep"),
+        ("a/remove.txt", "remove"),
+        ("a b.txt", "space"),
+        ("a-b.txt", "hyphen"),
+        ("a.txt", "dot"),
+    ] {
+        temp.child(name).write_str(content).unwrap();
+    }
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--pager", "never", "a/keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8_lossy(&output);
+    let keep = output
+        .split("Items to keep (2):\n")
+        .nth(1)
+        .unwrap()
+        .split("Items to delete")
+        .next()
+        .unwrap();
+    assert!(keep.contains("└── a/\n    └── keep.txt"));
+    assert_eq!(keep.matches("a/").count(), 1);
+    let delete = output.split("Items to delete (4):\n").nth(1).unwrap();
+    let expected = [
+        "├── a/+",
+        "│   └── remove.txt",
+        "├── a b.txt",
+        "├── a-b.txt",
+        "└── a.txt",
+    ];
+    let positions: Vec<_> = expected
+        .iter()
+        .map(|line| delete.find(line).unwrap())
+        .collect();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(delete.matches("a/+").count(), 1);
+
+    let flat = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--layout", "flat", "a/keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let flat = String::from_utf8_lossy(&flat);
+    let flat = flat.split("Items to delete (4):\n").nth(1).unwrap();
+    let paths = ["a b.txt", "a-b.txt", "a.txt", "a/remove.txt"];
+    let positions: Vec<_> = paths.iter().map(|path| flat.find(path).unwrap()).collect();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(!flat.contains("a/+"));
+
+    let json = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--format", "json", "a/keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let plan = parse_json_stdout(&json);
+    assert_eq!(relative_paths(&plan, "keep_items"), ["a", "a/keep.txt"]);
+    assert_eq!(relative_paths(&plan, "delete_items"), paths);
+    assert_eq!(relative_paths(&plan, "delete_roots"), paths);
+    for (name, content) in [
+        ("a/keep.txt", "keep"),
+        ("a/remove.txt", "remove"),
+        ("a b.txt", "space"),
+        ("a-b.txt", "hyphen"),
+        ("a.txt", "dot"),
+    ] {
+        temp.child(name).assert(content);
+    }
+}
+
+#[test]
 // Verify --layout flat displays relative paths instead of a tree.
 fn flat_option_displays_relative_paths_instead_of_a_tree() {
     let temp = assert_fs::TempDir::new().unwrap();
