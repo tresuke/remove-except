@@ -32,7 +32,7 @@ const HELP_STYLES: Styles = Styles::styled()
     version,
     about = "Keep matching items and remove the rest under a processing root",
     long_about = "Keep items matching one or more paths or glob patterns and remove the rest under the selected root. Multiple patterns are combined with OR. Always review the plan before deleting items. The normalized root and scanned entry paths must be representable as Unicode. Otherwise, nothing is printed to stdout or deleted (exit code 1), even with --force.",
-    after_long_help = "Output:\n  Tree: directories end with / and symlinks with @. With color, directories are blue, symlinks cyan, and kept parent directories in the delete tree green. Without color, kept parents end with +.\n  Flat: ItemType identifies each entry. Without color, directory and symlink paths end with / and @. Flat output has no kept-parent marker.\n  Status labels: NO REMOVALS (green) when there are no deletion operations; otherwise PREVIEW ONLY (cyan) for dry runs, CONFIRM TO DELETE (yellow) when confirmation is required, FORCE DELETE (red) with --force.\n  Colors are used automatically when output is a terminal and color is available.\n\nViewer:\n  --pager auto (default) pages long human output on supported terminals in normal and dry runs. JSON and --force bypass it. --pager always conflicts with JSON and --force; --pager never uses normal output.\n  Up/Down scroll, PageUp/PageDown page, Home/End move to the beginning/end, Tab/Shift+Tab switch sections. Long paths wrap without truncation. c finishes viewing; q/Esc/Ctrl+C cancel (code 3). Enter and y never approve deletion in the viewer.\n  Pending viewer input is discarded before a separate whole-line terminal confirmation. Only y/yes confirms (case-insensitive, surrounding whitespace ignored); anything else or EOF cancels.\n  Auto explains unavailable-terminal fallback on stderr; always fails with code 1. Terminal errors after startup stop without deletion. Human final confirmation repeats root, counts, and applicable warnings on stderr.\n\nPipelines:\n  --patterns-from-stdin reads one UTF-8 pattern per line (LF or CRLF). A leading BOM is removed, empty lines are ignored, other whitespace is kept, and # has no special meaning. Invalid UTF-8 or NUL characters (for example, UTF-16 input) are rejected. Confirmation is then read from the terminal; without one, nothing is deleted.\n  --format json writes exactly one JSON object (schema_version 1) with root, direct_match_count, keep_items, delete_items, and delete_roots to stdout. Messages and prompts go to stderr. New fields may be added without changing schema_version.\n\nExit codes:\n  0 plan shown or deletion completed; 1 runtime error (including viewer errors); 2 invalid arguments, input, root, or patterns; 3 nothing deleted because viewing was cancelled or confirmation was declined or unavailable.",
+    after_long_help = "Output:\n  Tree: directories end with / and symlinks with @. With color, directories are blue, symlinks cyan, and kept parent directories in the delete tree green. Without color, kept parents end with +.\n  Flat: ItemType identifies each entry. Without color, directory and symlink paths end with / and @. Flat output has no kept-parent marker.\n  Status labels: NO REMOVALS (green) when there are no deletion operations; otherwise PREVIEW ONLY (cyan) for dry runs, CONFIRM TO DELETE (yellow) when confirmation is required, FORCE DELETE (red) with --force.\n  Colors are used automatically when output is a terminal and color is available.\n\nViewer:\n  --pager auto (default) pages long human output on supported terminals in normal and dry runs. JSON and --force bypass it. --pager always conflicts with JSON and --force; --pager never uses normal output.\n  Up/Down scroll, PageUp/PageDown page, Home/End move to the beginning/end, Tab/Shift+Tab switch sections. Long paths wrap without truncation. c finishes viewing; q/Esc/Ctrl+C cancel (code 3). Enter and y never approve deletion in the viewer.\n  Pending viewer input is discarded before a separate whole-line terminal confirmation. Only a newline-terminated y/yes confirms (case-insensitive, surrounding whitespace ignored); anything else or EOF cancels.\n  Auto explains unavailable-terminal fallback on stderr; always fails with code 1. Terminal errors after startup stop without deletion. Human final confirmation repeats root, counts, and applicable warnings on stderr.\n\nPipelines:\n  --patterns-from-stdin reads one UTF-8 pattern per line (LF or CRLF). A leading BOM is removed, empty lines are ignored, other whitespace is kept, and # has no special meaning. Invalid UTF-8 or NUL characters (for example, UTF-16 input) are rejected. Confirmation is then read from the terminal; without one, nothing is deleted.\n  --format json writes exactly one JSON object (schema_version 1) with root, direct_match_count, keep_items, delete_items, and delete_roots to stdout. Messages and prompts go to stderr. New fields may be added without changing schema_version.\n\nExit codes:\n  0 plan shown or deletion completed; 1 runtime error (including viewer errors); 2 invalid arguments, input, root, or patterns; 3 nothing deleted because viewing was cancelled or confirmation was declined or unavailable.",
     styles = HELP_STYLES
 )]
 struct Args {
@@ -103,7 +103,7 @@ struct Args {
         required_unless_present = "patterns_from_stdin",
         num_args = 1..,
         value_name = "KEEP_PATTERN",
-        help = "Paths or glob patterns to keep (* matches one level, ** recurses); any match keeps an item"
+        help = "Paths or glob patterns to keep (* matches one level, ? one Unicode scalar, ** recurses); any match keeps an item"
     )]
     patterns: Vec<String>,
 }
@@ -132,6 +132,28 @@ enum SummarySection {
     Keep,
     Delete,
     Both,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SectionKind {
+    Keep,
+    Delete,
+}
+
+impl SectionKind {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Keep => "Items to keep",
+            Self::Delete => "Items to delete",
+        }
+    }
+
+    fn summary_title(self) -> &'static str {
+        match self {
+            Self::Keep => "KEEP:",
+            Self::Delete => "DELETE:",
+        }
+    }
 }
 
 struct PlanDisplayOptions {
@@ -669,11 +691,11 @@ fn write_prompt(prompt: &str) -> io::Result<()> {
 /// Reads one full answer line, so a partial `y` keypress never confirms on its own.
 ///
 /// Input that is not valid UTF-8, such as a non-UTF-8 console code page, is decoded
-/// lossily; anything other than `y` or `yes` declines.
+/// lossily; an unterminated answer at EOF and anything other than `y` or `yes` decline.
 fn read_confirmation(mut input: impl BufRead) -> io::Result<bool> {
     let mut answer = Vec::new();
     input.read_until(b'\n', &mut answer)?;
-    Ok(is_affirmative(&String::from_utf8_lossy(&answer)))
+    Ok(answer.last() == Some(&b'\n') && is_affirmative(&String::from_utf8_lossy(&answer)))
 }
 
 fn is_affirmative(answer: &str) -> bool {
@@ -789,7 +811,7 @@ fn render_plan(
     let keep_line = output.lines;
     print_item_section(
         &mut output,
-        "Items to keep",
+        SectionKind::Keep,
         plan.keep_items(),
         keep_summary,
         &options,
@@ -799,7 +821,7 @@ fn render_plan(
     let delete_line = output.lines;
     print_item_section(
         &mut output,
-        "Items to delete",
+        SectionKind::Delete,
         plan.delete_items(),
         delete_summary,
         &options,
@@ -858,60 +880,55 @@ fn print_legend(output: &mut impl Write, flat: bool, colors_enabled: bool) -> io
 
 fn print_item_section(
     output: &mut impl Write,
-    title: &str,
+    section: SectionKind,
     items: &[PlannedItem],
     summary_only: bool,
     options: &PlanDisplayOptions,
 ) -> io::Result<()> {
-    let is_keep_section = title == "Items to keep";
-    let title = if options.colors_enabled {
-        if is_keep_section {
-            style(title).green().bold().to_string()
-        } else {
-            style(title).red().bold().to_string()
-        }
-    } else {
-        title.to_owned()
+    let title = section.title();
+    let title = match (section, options.colors_enabled) {
+        (SectionKind::Keep, true) => style(title).green().bold().to_string(),
+        (SectionKind::Delete, true) => style(title).red().bold().to_string(),
+        (_, false) => title.to_owned(),
     };
 
     if summary_only {
-        let summary_title = if is_keep_section { "KEEP:" } else { "DELETE:" };
-        let summary_title = if options.colors_enabled {
-            if is_keep_section {
-                style(summary_title).green().bold().to_string()
-            } else {
-                style(summary_title).red().bold().to_string()
-            }
-        } else {
-            summary_title.to_owned()
+        let summary_title = section.summary_title();
+        let summary_title = match (section, options.colors_enabled) {
+            (SectionKind::Keep, true) => style(summary_title).green().bold().to_string(),
+            (SectionKind::Delete, true) => style(summary_title).red().bold().to_string(),
+            (_, false) => summary_title.to_owned(),
         };
         writeln!(output, "{summary_title}")?;
-        if is_keep_section {
-            let item_label = if items.len() == 1 { "item" } else { "items" };
-            let match_label = if options.direct_match_count == 1 {
-                "match"
-            } else {
-                "matches"
-            };
-            writeln!(
-                output,
-                "  {} kept {item_label} (including required ancestors); {} direct pattern {match_label}",
-                items.len(),
-                options.direct_match_count
-            )?;
-        } else {
-            let item_label = if items.len() == 1 { "item" } else { "items" };
-            let operation_label = if options.delete_root_count == 1 {
-                "operation"
-            } else {
-                "operations"
-            };
-            writeln!(
-                output,
-                "  {} deletion {item_label}; {} top-level deletion {operation_label}",
-                items.len(),
-                options.delete_root_count
-            )?;
+        match section {
+            SectionKind::Keep => {
+                let item_label = if items.len() == 1 { "item" } else { "items" };
+                let match_label = if options.direct_match_count == 1 {
+                    "match"
+                } else {
+                    "matches"
+                };
+                writeln!(
+                    output,
+                    "  {} kept {item_label} (including required ancestors); {} direct pattern {match_label}",
+                    items.len(),
+                    options.direct_match_count
+                )?;
+            }
+            SectionKind::Delete => {
+                let item_label = if items.len() == 1 { "item" } else { "items" };
+                let operation_label = if options.delete_root_count == 1 {
+                    "operation"
+                } else {
+                    "operations"
+                };
+                writeln!(
+                    output,
+                    "  {} deletion {item_label}; {} top-level deletion {operation_label}",
+                    items.len(),
+                    options.delete_root_count
+                )?;
+            }
         }
         return Ok(());
     }
@@ -951,8 +968,11 @@ fn print_item_section(
         }
     } else {
         let mut ordered_items: Vec<_> = items.iter().collect();
-        ordered_items
-            .sort_unstable_by(|left, right| left.relative_path().cmp(right.relative_path()));
+        ordered_items.sort_unstable_by(|left, right| {
+            left.relative_path()
+                .split('/')
+                .cmp(right.relative_path().split('/'))
+        });
         print_tree_items(output, &ordered_items, "", "", options.colors_enabled)?;
     }
     Ok(())
@@ -1113,12 +1133,22 @@ mod tests {
     use super::display_root_path;
 
     #[test]
-    // Verify only a whole `y` or `yes` line confirms; partial or other answers decline.
+    // Verify only a newline-terminated `y` or `yes` line confirms.
     fn read_confirmation_requires_a_full_affirmative_line() {
-        for answer in ["y\n", "YES\r\n", " yes \n", "y"] {
+        for answer in ["y\n", "YES\r\n", " yes \n"] {
             assert!(read_confirmation(answer.as_bytes()).unwrap(), "{answer:?}");
         }
-        for answer in ["", "\n", "n\n", "maybe\n", "yes please\n", "ye\n", "y es\n"] {
+        for answer in [
+            "",
+            "y",
+            "yes",
+            "n\n",
+            "maybe\n",
+            "yes please\n",
+            "ye\n",
+            "y es\n",
+            "y\r",
+        ] {
             assert!(!read_confirmation(answer.as_bytes()).unwrap(), "{answer:?}");
         }
         assert!(!read_confirmation(b"\xff\xfe\n".as_slice()).unwrap());
@@ -1262,7 +1292,7 @@ mod tests {
         let mut output = Vec::new();
         super::print_item_section(
             &mut output,
-            "Items to delete",
+            super::SectionKind::Delete,
             plan.delete_items(),
             false,
             &options,
