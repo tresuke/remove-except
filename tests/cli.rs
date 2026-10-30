@@ -1109,6 +1109,8 @@ fn confirmation_declines_answers_other_than_y_or_yes() {
     for answer in [
         &b"maybe\n"[..],
         b"yes please\n",
+        b"y",
+        b"yes",
         b"\x82\xcd\x82\xa2\r\n",
         b"",
     ] {
@@ -1781,4 +1783,10 @@ fn help_documents_pipeline_options_and_exit_codes() {
     assert!(output.contains("--format <FORMAT>"));
     assert!(output.contains("schema_version 1"));
     assert!(output.contains("Exit codes:"));
+    let confirmation_line = output
+        .lines()
+        .find(|line| line.contains("Pending viewer input"))
+        .unwrap();
+    assert!(confirmation_line.starts_with("  Pending viewer input"));
+    assert!(confirmation_line.contains("newline-terminated y/yes"));
 }
