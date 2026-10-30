@@ -103,7 +103,7 @@ struct Args {
         required_unless_present = "patterns_from_stdin",
         num_args = 1..,
         value_name = "KEEP_PATTERN",
-        help = "Paths or glob patterns to keep (* matches one level, ** recurses); any match keeps an item"
+        help = "Paths or glob patterns to keep (* matches one level, ? one Unicode scalar, ** recurses); any match keeps an item"
     )]
     patterns: Vec<String>,
 }

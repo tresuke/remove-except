@@ -156,8 +156,8 @@ Common glob syntax:
 | --- | --- |
 | `*.md` | Item paths ending in `.md` directly under the processing directory. `*` does not cross `/`. |
 | `**/*.md` | Item paths ending in `.md` directly under the processing directory or in nested directories. `**/` matches zero or more directory levels. |
-| `reports/report?.csv` | `?` matches any single character except `/`. In this example, it matches `report1.csv` and `report2.csv`. |
-| `reports/report[12].csv` | `[]` matches one of the listed characters. In this example, it matches `report1.csv` and `report2.csv`. |
+| `reports/report?.csv` | `?` matches one Unicode scalar value except `/`. In this example, it matches `report1.csv` and `report2.csv`. |
+| `reports/report[12].csv` | `[]` matches one listed Unicode scalar value. In this example, it matches `report1.csv` and `report2.csv`. |
 
 To limit a glob to a particular subdirectory, include its path relative to the processing directory in the pattern.
 
@@ -206,6 +206,10 @@ Absolute patterns are compared with the processing directory after symbolic link
 ### Matching and Retention
 
 Patterns support `*`, `**`, `?`, character classes `[]`, and alternation `{a,b}`. Files, directories, and symbolic links can match. See the examples above for `*`, `**`, `?`, a character class, and path-separator behavior. See the rest of this section for alternation and retention rules.
+
+`?` and a character class each match one Unicode scalar value, not one byte or one user-perceived grapheme. A character made from a base character and combining marks therefore requires multiple `?` wildcards.
+
+On Ubuntu, `**` also matches items whose names contain newlines. Escape a literal backslash as `\\`; following text such as `x80` remains literal, not a hexadecimal escape. Correcting Unicode matching can change keep/delete results compared with the previous byte-based matching on Ubuntu. Review all items with `--dry-run` and without `--summary` before deleting.
 
 A matched item and its parent directories are kept, but unmatched descendants are not. A directory path without a glob keeps that directory and all of its contents. `dir/*` matches only items directly under `dir`; it does not recursively keep the contents of matched subdirectories. `.` and `./` keep everything under the processing directory.
 
