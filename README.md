@@ -156,8 +156,8 @@ Common glob syntax:
 | --- | --- |
 | `*.md` | Item paths ending in `.md` directly under the processing directory. `*` does not cross `/`. |
 | `**/*.md` | Item paths ending in `.md` directly under the processing directory or in nested directories. `**/` matches zero or more directory levels. |
-| `reports/report?.csv` | `?` matches any single character except `/`. In this example, it matches `report1.csv` and `report2.csv`. |
-| `reports/report[12].csv` | `[]` matches one of the listed characters. In this example, it matches `report1.csv` and `report2.csv`. |
+| `reports/report?.csv` | `?` matches one Unicode scalar value except `/`. In this example, it matches `report1.csv` and `report2.csv`. |
+| `reports/report[12].csv` | `[]` matches one listed Unicode scalar value. In this example, it matches `report1.csv` and `report2.csv`. |
 
 To limit a glob to a particular subdirectory, include its path relative to the processing directory in the pattern.
 
@@ -207,6 +207,10 @@ Absolute patterns are compared with the processing directory after symbolic link
 
 Patterns support `*`, `**`, `?`, character classes `[]`, and alternation `{a,b}`. Files, directories, and symbolic links can match. See the examples above for `*`, `**`, `?`, a character class, and path-separator behavior. See the rest of this section for alternation and retention rules.
 
+`?` and a character class each match one Unicode scalar value, not one byte or one user-perceived grapheme. A character made from a base character and combining marks therefore requires multiple `?` wildcards.
+
+On Ubuntu, `**` also matches items whose names contain newlines. Escape a literal backslash as `\\`; following text such as `x80` remains literal, not a hexadecimal escape. Correcting Unicode matching can change keep/delete results compared with the previous byte-based matching on Ubuntu. Review all items with `--dry-run` and without `--summary` before deleting.
+
 A matched item and its parent directories are kept, but unmatched descendants are not. A directory path without a glob keeps that directory and all of its contents. `dir/*` matches only items directly under `dir`; it does not recursively keep the contents of matched subdirectories. `.` and `./` keep everything under the processing directory.
 
 The glob characters are `*`, `?`, `[`, `{`, and `}`. On Ubuntu, `\` is also a glob character because it escapes the next character. A pattern containing any of them is treated as a glob and does not keep the contents of matched directories. For example, `reports/{2024,2025}` keeps only the two directories. To keep their contents too, append `/**`, as in `reports/{2024,2025}/**`, or specify `reports/2024` and `reports/2025` separately.
@@ -225,7 +229,7 @@ A symbolic link supplied to `--root` is resolved to its target. Links under the 
 
 The default `--layout tree` shows kept items and deletion targets as a tree; `--layout flat` shows `ItemType` and `RelativePath` columns. Pattern matches and required ancestors are shown separately from deletion targets. See “Output and Options” for colors, markers, and sorting.
 
-In a normal run, the tool displays both lists before asking for confirmation. Sections selected by `--summary` show counts instead of path lists. The answer is read as a whole line: `y` or `yes` (case-insensitive, ignoring surrounding whitespace) deletes. `n`, an empty Enter, any other answer, or end of input (EOF) cancels. The default is No; cancellation exits with code 3. `--force` skips only this prompt; invalid patterns or an invalid processing directory still produce an error.
+In a normal run, the tool displays both lists before asking for confirmation. Sections selected by `--summary` show counts instead of path lists. Only a newline-terminated whole-line answer of `y` or `yes` (case-insensitive, ignoring surrounding whitespace) deletes. An empty Enter, an unterminated answer at EOF, any other answer, or EOF cancels. The default is No; cancellation exits with code 3. `--force` skips only this prompt; invalid patterns or an invalid processing directory still produce an error.
 
 If none of the supplied keep patterns matches any item, a warning is shown and everything under the processing directory becomes a deletion target.
 
@@ -251,7 +255,7 @@ For human-readable output, ordinary Windows drive and UNC paths omit the `\\?\` 
 | Tree (default) | Directories blue, symbolic links cyan, retained parents that appear only in the deletion list green | `/` for directories, `@` for symbolic links, `+` for retained parents |
 | Flat | `ItemType` and `RelativePath` columns; directories blue, symbolic links cyan, files uncolored | `/` on directory paths, `@` on symbolic-link paths, no file marker |
 
-Every entry in the deletion list is a deletion target; top-level deletion items are not marked separately. Flat layout has no retained-parent color or marker. `--sort-by-type` requires `--layout flat` and sorts by Directory, File, then Symlink, with relative-path order within each type. Without type sorting, items are displayed in relative-path order. Sorting affects display only, not the displayed lists or deletion order.
+Every entry in the deletion list is a deletion target; top-level deletion items are not marked separately. Flat layout has no retained-parent color or marker. Tree layout sorts each directory's immediate children by name and displays each directory subtree contiguously. Flat layout without type sorting uses relative-path order. `--sort-by-type` requires `--layout flat` and sorts by Directory, File, then Symlink, with relative-path order within each type. These display orders do not change the plan or deletion order.
 
 Examples:
 
@@ -421,13 +425,17 @@ If an error occurs during deletion (exit code 1), items already deleted are not 
 
 ## Versioning and Compatibility
 
+### Confirmation Fix Planned for the Next Release
+
+- Fix deletion on an unterminated `y` / `yes` at EOF. The v0.3.0 documentation described Enter to confirm and EOF to cancel, but the distributed implementation also accepted unterminated affirmative answers. Every input path will now require a newline-terminated affirmative line; otherwise, nothing is deleted and the command cancels with exit code 3.
+
 ### Upgrading from v0.2.4 to v0.3.0
 
 - Glob classification now includes braces (`{` and `}`) and, on Ubuntu, the backslash escape (`\`). These patterns no longer get literal-directory recursive retention. Previously retained descendants may become deletion targets: `reports/{2024,2025}` keeps the matching directories, not their contents; use `reports/{2024,2025}/**` to keep their descendants too. Review all items with `--dry-run` and without `--summary` after upgrading.
-- Confirmation now reads a whole line on every input path. Only `y` or `yes` followed by Enter confirms (case-insensitive, surrounding whitespace ignored); other answers and EOF cancel. Cancellation exits with code `3` rather than `0`; invalid arguments, stdin input, roots, and patterns exit with code `2`. Update scripts that depend on exit codes or single-key confirmation.
+- Confirmation was unified to read a whole line on every input path, normally using `y` or `yes` followed by Enter (case-insensitive, surrounding whitespace ignored). However, the distributed implementation also accepted unterminated affirmative answers; see "Confirmation Fix Planned for the Next Release" above. Cancellation exits with code `3` rather than `0`; invalid arguments, stdin input, roots, and patterns exit with code `2`. Update scripts that depend on exit codes or single-key confirmation.
 - `--pager auto` adds a viewing step for long terminal output. Use `--pager never` for ordinary output. The viewer does not change keep/delete decisions or deletion order; `c` only finishes viewing, and Enter or `y` in the viewer never authorizes deletion. Final confirmation is separate, with a recap on stderr. With stdin patterns or after viewing, confirmation uses the controlling terminal, not stdin.
 - `--patterns-from-stdin` adds UTF-8 newline-delimited keep patterns; `--format json` adds the pre-deletion plan with `schema_version: 1`. Human output is not a stable machine-readable interface. Library callers can identify validation failures with the new `ValidationError` type.
-- The minimum Rust version remains 1.88. A plan is not a protected filesystem snapshot: files may change between preview and deletion. The no-match warning, root validation, and no-follow-symlinks behavior remain in effect; `--force` skips only confirmation.
+- The minimum Rust version remains 1.88. A plan records entries observed during traversal; the scan is not an atomic or protected filesystem snapshot and does not prevent concurrent changes. The plan is not refreshed after construction, so files may change between preview and deletion. The no-match warning, root validation, and no-follow-symlinks behavior remain in effect; `--force` skips only confirmation.
 
 Updates may change which items are kept or deleted, or how deletion is confirmed. Even a patch update may change deletion results by fixing a bug. Review the changes when updating and inspect the targets with `--dry-run` before deleting.
 

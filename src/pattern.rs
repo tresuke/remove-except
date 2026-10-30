@@ -1,13 +1,13 @@
 use std::path::Path;
 
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 use anyhow::Context;
 use anyhow::Result;
 use globset::GlobBuilder;
-#[cfg(not(windows))]
+#[cfg(not(any(windows, unix)))]
 use globset::{GlobSet, GlobSetBuilder};
-#[cfg(windows)]
-use regex_automata::meta::Regex;
+#[cfg(any(windows, unix))]
+use regex_automata::{meta::Regex, util::syntax};
 
 use crate::error::{invalid, invalid_with_source};
 use crate::path::{
@@ -17,21 +17,30 @@ use crate::path::{
 
 #[cfg(windows)]
 fn windows_glob_regex(glob: &globset::Glob) -> Result<String> {
+    Ok(format!("(?i:{})", unicode_glob_regex(glob)?))
+}
+
+#[cfg(any(windows, unix))]
+fn unicode_glob_regex(glob: &globset::Glob) -> Result<String> {
     let byte_regex = glob
         .regex()
         .strip_prefix("(?-u)")
         .context("Glob regex did not use the expected byte mode prefix")?;
-    let unicode_regex = decode_utf8_regex_literals(byte_regex)?;
-    Ok(format!("(?i:{unicode_regex})"))
+    decode_utf8_regex_literals(byte_regex)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 fn decode_utf8_regex_literals(regex: &str) -> Result<String> {
     let bytes = regex.as_bytes();
     let mut decoded = String::with_capacity(regex.len());
     let mut offset = 0;
 
     while offset < bytes.len() {
+        if bytes.get(offset..offset + 2) == Some(br"\\") {
+            decoded.push_str(r"\\");
+            offset += 2;
+            continue;
+        }
         if let Some((byte, next_offset)) = regex_hex_escape(bytes, offset)
             && byte >= 0x80
         {
@@ -61,7 +70,7 @@ fn decode_utf8_regex_literals(regex: &str) -> Result<String> {
     Ok(decoded)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 fn regex_hex_escape(bytes: &[u8], offset: usize) -> Option<(u8, usize)> {
     let escape = bytes.get(offset..offset + 4)?;
     if escape[0] != b'\\' || escape[1] != b'x' {
@@ -72,7 +81,7 @@ fn regex_hex_escape(bytes: &[u8], offset: usize) -> Option<(u8, usize)> {
     Some(((high << 4) | low, offset + 4))
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 fn hex_digit(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
@@ -85,10 +94,10 @@ fn hex_digit(byte: u8) -> Option<u8> {
 /// Compiles keep patterns into a matcher and records literal directory prefixes.
 pub(super) fn compile_patterns(root: &Path, patterns: &[String]) -> Result<CompiledPatterns> {
     let root_text = normalize_absolute_for_match(&root.to_string_lossy());
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, unix)))]
     let mut builder = GlobSetBuilder::new();
     let mut prefixes = Vec::with_capacity(patterns.len());
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     let mut regexes = Vec::with_capacity(patterns.len());
 
     for raw in patterns {
@@ -108,7 +117,9 @@ pub(super) fn compile_patterns(root: &Path, patterns: &[String]) -> Result<Compi
             .map_err(|error| invalid_with_source(error, format!("Invalid glob pattern: {raw}")))?;
         #[cfg(windows)]
         regexes.push(windows_glob_regex(&glob)?);
-        #[cfg(not(windows))]
+        #[cfg(unix)]
+        regexes.push(unicode_glob_regex(&glob)?);
+        #[cfg(not(any(windows, unix)))]
         builder.add(glob);
 
         if !has_glob_syntax(&pattern) {
@@ -116,9 +127,12 @@ pub(super) fn compile_patterns(root: &Path, patterns: &[String]) -> Result<Compi
         }
     }
 
-    #[cfg(windows)]
-    let matcher = Regex::new_many(&regexes).context("Failed to compile keep patterns")?;
-    #[cfg(not(windows))]
+    #[cfg(any(windows, unix))]
+    let matcher = Regex::builder()
+        .syntax(syntax::Config::new().dot_matches_new_line(true))
+        .build_many(&regexes)
+        .context("Failed to compile keep patterns")?;
+    #[cfg(not(any(windows, unix)))]
     let matcher = builder.build()?;
 
     Ok(CompiledPatterns { matcher, prefixes })
@@ -138,20 +152,20 @@ fn has_glob_syntax(pattern: &str) -> bool {
 }
 
 pub(super) struct CompiledPatterns {
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     matcher: Regex,
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, unix)))]
     matcher: GlobSet,
     prefixes: Vec<String>,
 }
 
 impl CompiledPatterns {
     pub(super) fn matches(&self, path: &str) -> bool {
-        #[cfg(windows)]
+        #[cfg(any(windows, unix))]
         if self.matcher.is_match(path.as_bytes()) {
             return true;
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, unix)))]
         if self.matcher.is_match(path) {
             return true;
         }
@@ -212,9 +226,118 @@ fn strip_case_insensitive_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a 
     }
 }
 
+#[cfg(all(test, unix))]
+mod unix_tests {
+    use globset::GlobBuilder;
+    use regex_automata::meta::Regex;
+
+    use super::unicode_glob_regex;
+
+    fn compile_unix_glob(pattern: &str) -> Regex {
+        let glob = GlobBuilder::new(pattern)
+            .literal_separator(true)
+            .build()
+            .unwrap();
+        Regex::new(&unicode_glob_regex(&glob).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn question_mark_matches_one_unicode_scalar_without_crossing_separators() {
+        let matcher = compile_unix_glob("?.txt");
+        assert!(matcher.is_match("é.txt".as_bytes()));
+        assert!(matcher.is_match("あ.txt".as_bytes()));
+        assert!(!matcher.is_match("e\u{301}.txt".as_bytes()));
+        assert!(!matcher.is_match("ee.txt".as_bytes()));
+        assert!(!matcher.is_match("nested/é.txt".as_bytes()));
+    }
+
+    #[test]
+    fn question_marks_match_each_scalar_in_a_combining_sequence() {
+        let matcher = compile_unix_glob("??.txt");
+        assert!(matcher.is_match("e\u{301}.txt".as_bytes()));
+        assert!(!matcher.is_match("é.txt".as_bytes()));
+    }
+
+    #[test]
+    fn character_classes_match_unicode_scalars_and_ranges() {
+        let listed = compile_unix_glob("[éあ].txt");
+        assert!(listed.is_match("é.txt".as_bytes()));
+        assert!(listed.is_match("あ.txt".as_bytes()));
+        assert!(!listed.is_match("è.txt".as_bytes()));
+        assert!(!listed.is_match("e\u{301}.txt".as_bytes()));
+
+        let range = compile_unix_glob("[è-ê].txt");
+        assert!(range.is_match("è.txt".as_bytes()));
+        assert!(range.is_match("é.txt".as_bytes()));
+        assert!(range.is_match("ê.txt".as_bytes()));
+        assert!(!range.is_match("ë.txt".as_bytes()));
+
+        let negated = compile_unix_glob("[!é].txt");
+        assert!(!negated.is_match("é.txt".as_bytes()));
+        assert!(negated.is_match("è.txt".as_bytes()));
+        assert!(!negated.is_match("e\u{301}.txt".as_bytes()));
+    }
+
+    #[test]
+    fn unicode_matching_preserves_case_and_glob_separator_rules() {
+        let case_sensitive = compile_unix_glob("é.txt");
+        assert!(case_sensitive.is_match("é.txt".as_bytes()));
+        assert!(!case_sensitive.is_match("É.txt".as_bytes()));
+
+        let single_level = compile_unix_glob("*.txt");
+        assert!(single_level.is_match("é.txt".as_bytes()));
+        assert!(!single_level.is_match("nested/é.txt".as_bytes()));
+
+        let recursive = compile_unix_glob("**/*.txt");
+        assert!(recursive.is_match("é.txt".as_bytes()));
+        assert!(recursive.is_match("nested/é.txt".as_bytes()));
+    }
+
+    #[test]
+    fn escaped_glob_characters_remain_literal() {
+        let matcher = compile_unix_glob(r"\*.txt");
+        assert!(matcher.is_match("*.txt".as_bytes()));
+        assert!(!matcher.is_match("x.txt".as_bytes()));
+    }
+}
+
 #[cfg(test)]
 mod normalization_tests {
     use super::normalize_pattern;
+
+    #[cfg(any(windows, unix))]
+    #[test]
+    fn recursive_globs_preserve_newline_matching() {
+        for (pattern, path) in [
+            ("**", "a\nb"),
+            ("dir/**", "dir/a\nb"),
+            ("**/x", "a\nb/x"),
+            ("dir/**/x", "dir/a\nb/x"),
+            ("**/*.txt", "a\nb/nested/file.txt"),
+        ] {
+            let compiled =
+                super::compile_patterns(std::path::Path::new("/work"), &[pattern.to_owned()])
+                    .unwrap();
+            assert!(compiled.matches(path), "{pattern:?} should keep {path:?}");
+        }
+    }
+
+    #[cfg(any(windows, unix))]
+    #[test]
+    fn regex_literal_decoding_preserves_escaped_backslashes() {
+        for regex in [
+            r"^\\x80\.txt$",
+            r"^\\xC3\.txt$",
+            r"^\\xc3\\xa9\.txt$",
+            r"^[\\x80]\.txt$",
+        ] {
+            assert_eq!(super::decode_utf8_regex_literals(regex).unwrap(), regex);
+        }
+        assert_eq!(
+            super::decode_utf8_regex_literals(r"^\\x80\xc3\xa9\.txt$").unwrap(),
+            "^\\\\x80é\\.txt$"
+        );
+    }
 
     #[test]
     fn root_patterns_normalize_to_an_empty_relative_pattern() {

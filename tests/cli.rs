@@ -532,6 +532,125 @@ fn default_display_sorts_by_relative_path_and_marks_kept_parents_without_root_ta
 }
 
 #[test]
+// Verify tree ordering keeps each directory subtree contiguous when sibling names share prefixes.
+fn tree_display_groups_directory_subtrees_before_prefix_siblings() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("a/child.txt").write_str("remove").unwrap();
+    temp.child("a.txt").write_str("remove").unwrap();
+    temp.child("a-b.txt").write_str("remove").unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let output = String::from_utf8_lossy(&output);
+    let tree = output.split("Items to delete (4):\n").nth(1).unwrap();
+    let directory = tree.find("├── a/").unwrap();
+    let child = tree.find("│   └── child.txt").unwrap();
+    let hyphen_sibling = tree.find("├── a-b.txt").unwrap();
+    let dot_sibling = tree.find("└── a.txt").unwrap();
+    assert!(directory < child && child < hyphen_sibling && hyphen_sibling < dot_sibling);
+    assert_eq!(tree.matches("a/").count(), 1);
+    assert!(!tree.contains("a/+"));
+    temp.child("a/child.txt").assert("remove");
+    temp.child("a.txt").assert("remove");
+    temp.child("a-b.txt").assert("remove");
+}
+
+#[test]
+fn tree_display_groups_kept_parents_and_preserves_flat_and_json_order() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    for (name, content) in [
+        ("a/keep.txt", "keep"),
+        ("a/remove.txt", "remove"),
+        ("a b.txt", "space"),
+        ("a-b.txt", "hyphen"),
+        ("a.txt", "dot"),
+    ] {
+        temp.child(name).write_str(content).unwrap();
+    }
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--pager", "never", "a/keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8_lossy(&output);
+    let keep = output
+        .split("Items to keep (2):\n")
+        .nth(1)
+        .unwrap()
+        .split("Items to delete")
+        .next()
+        .unwrap();
+    assert!(keep.contains("└── a/\n    └── keep.txt"));
+    assert_eq!(keep.matches("a/").count(), 1);
+    let delete = output.split("Items to delete (4):\n").nth(1).unwrap();
+    let expected = [
+        "├── a/+",
+        "│   └── remove.txt",
+        "├── a b.txt",
+        "├── a-b.txt",
+        "└── a.txt",
+    ];
+    let positions: Vec<_> = expected
+        .iter()
+        .map(|line| delete.find(line).unwrap())
+        .collect();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(delete.matches("a/+").count(), 1);
+
+    let flat = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--layout", "flat", "a/keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let flat = String::from_utf8_lossy(&flat);
+    let flat = flat.split("Items to delete (4):\n").nth(1).unwrap();
+    let paths = ["a b.txt", "a-b.txt", "a.txt", "a/remove.txt"];
+    let positions: Vec<_> = paths.iter().map(|path| flat.find(path).unwrap()).collect();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(!flat.contains("a/+"));
+
+    let json = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--format", "json", "a/keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let plan = parse_json_stdout(&json);
+    assert_eq!(relative_paths(&plan, "keep_items"), ["a", "a/keep.txt"]);
+    assert_eq!(relative_paths(&plan, "delete_items"), paths);
+    assert_eq!(relative_paths(&plan, "delete_roots"), paths);
+    for (name, content) in [
+        ("a/keep.txt", "keep"),
+        ("a/remove.txt", "remove"),
+        ("a b.txt", "space"),
+        ("a-b.txt", "hyphen"),
+        ("a.txt", "dot"),
+    ] {
+        temp.child(name).assert(content);
+    }
+}
+
+#[test]
 // Verify --layout flat displays relative paths instead of a tree.
 fn flat_option_displays_relative_paths_instead_of_a_tree() {
     let temp = assert_fs::TempDir::new().unwrap();
@@ -990,6 +1109,8 @@ fn confirmation_declines_answers_other_than_y_or_yes() {
     for answer in [
         &b"maybe\n"[..],
         b"yes please\n",
+        b"y",
+        b"yes",
         b"\x82\xcd\x82\xa2\r\n",
         b"",
     ] {
@@ -1440,6 +1561,183 @@ fn json_dry_run_outputs_complete_plan_only() {
 }
 
 #[test]
+fn unicode_globs_match_question_marks_and_classes_by_scalar() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    for name in [
+        "é.txt",
+        "あ.txt",
+        "è.txt",
+        "ê.txt",
+        "ë.txt",
+        "e\u{301}.txt",
+        "nested/é.txt",
+    ] {
+        temp.child(name).write_str(name).unwrap();
+    }
+
+    for (pattern, expected_kept, expected_deleted) in [
+        (
+            "?.txt",
+            vec!["é.txt", "あ.txt", "è.txt", "ê.txt", "ë.txt"],
+            vec!["e\u{301}.txt", "nested", "nested/é.txt"],
+        ),
+        (
+            "??.txt",
+            vec!["e\u{301}.txt"],
+            vec![
+                "é.txt",
+                "あ.txt",
+                "è.txt",
+                "ê.txt",
+                "ë.txt",
+                "nested",
+                "nested/é.txt",
+            ],
+        ),
+        (
+            "[éあ].txt",
+            vec!["é.txt", "あ.txt"],
+            vec![
+                "è.txt",
+                "ê.txt",
+                "ë.txt",
+                "e\u{301}.txt",
+                "nested",
+                "nested/é.txt",
+            ],
+        ),
+        (
+            "[è-ê].txt",
+            vec!["é.txt", "è.txt", "ê.txt"],
+            vec!["あ.txt", "ë.txt", "e\u{301}.txt", "nested", "nested/é.txt"],
+        ),
+        (
+            "[!é].txt",
+            vec!["あ.txt", "è.txt", "ê.txt", "ë.txt"],
+            vec!["é.txt", "e\u{301}.txt", "nested", "nested/é.txt"],
+        ),
+    ] {
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["--dry-run", "--format", "json", pattern])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let plan = parse_json_stdout(&output);
+        let kept = relative_paths(&plan, "keep_items");
+        let deleted = relative_paths(&plan, "delete_items");
+
+        for path in expected_kept {
+            assert!(
+                kept.contains(&path.to_owned()),
+                "{pattern} should keep {path}"
+            );
+        }
+        for path in expected_deleted {
+            assert!(
+                deleted.contains(&path.to_owned()),
+                "{pattern} should delete {path}"
+            );
+        }
+    }
+
+    for name in [
+        "é.txt",
+        "あ.txt",
+        "è.txt",
+        "ê.txt",
+        "ë.txt",
+        "e\u{301}.txt",
+        "nested/é.txt",
+    ] {
+        temp.child(name).assert(name);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn recursive_globs_keep_paths_containing_newlines() {
+    for (pattern, name) in [
+        ("**", "a\nb"),
+        ("dir/**", "dir/a\nb"),
+        ("**/x", "a\nb/x"),
+        ("dir/**/x", "dir/a\nb/x"),
+        ("**/*.txt", "a\nb/nested/file.txt"),
+    ] {
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child(name).write_str("keep").unwrap();
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["--dry-run", "--format", "json", pattern])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let plan = parse_json_stdout(&output);
+        assert!(
+            relative_paths(&plan, "keep_items").contains(&name.to_owned()),
+            "{pattern:?} should keep {name:?}"
+        );
+        assert!(relative_paths(&plan, "delete_items").is_empty());
+        assert!(relative_paths(&plan, "delete_roots").is_empty());
+        assert_eq!(plan["direct_match_count"], 1);
+        temp.child(name).assert("keep");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn escaped_backslashes_before_hex_text_remain_literal() {
+    for (pattern, name) in [
+        (r"\\x80.txt", r"\x80.txt"),
+        (r"\\xC3.txt", r"\xC3.txt"),
+        (r"\\xc3\\xa9.txt", r"\xc3\xa9.txt"),
+        ("\\\\x80é.txt", "\\x80é.txt"),
+    ] {
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child(name).write_str("keep").unwrap();
+        temp.child("other.txt").write_str("remove").unwrap();
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["--dry-run", "--format", "json", pattern])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let plan = parse_json_stdout(&output);
+        assert_eq!(relative_paths(&plan, "keep_items"), [name]);
+        assert_eq!(relative_paths(&plan, "delete_items"), ["other.txt"]);
+        assert_eq!(relative_paths(&plan, "delete_roots"), ["other.txt"]);
+        assert_eq!(plan["direct_match_count"], 1);
+        temp.child(name).assert("keep");
+        temp.child("other.txt").assert("remove");
+    }
+}
+
+#[test]
+fn descending_unicode_class_ranges_are_input_errors() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    for pattern in ["[ê-è]", "[ん-あ]", "[z-a]"] {
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["--dry-run", "--format", "json", pattern])
+            .assert()
+            .code(2)
+            .get_output()
+            .clone();
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Invalid glob pattern"));
+        temp.child("keep.txt").assert("keep");
+    }
+}
+
+#[test]
 // Verify JSON mode keeps execution messages and prompts on stderr.
 fn json_execution_keeps_stdout_machine_readable() {
     let temp = assert_fs::TempDir::new().unwrap();
@@ -1662,4 +1960,10 @@ fn help_documents_pipeline_options_and_exit_codes() {
     assert!(output.contains("--format <FORMAT>"));
     assert!(output.contains("schema_version 1"));
     assert!(output.contains("Exit codes:"));
+    let confirmation_line = output
+        .lines()
+        .find(|line| line.contains("Pending viewer input"))
+        .unwrap();
+    assert!(confirmation_line.starts_with("  Pending viewer input"));
+    assert!(confirmation_line.contains("newline-terminated y/yes"));
 }
