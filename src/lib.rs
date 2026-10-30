@@ -10,8 +10,9 @@
 //! # Safety by Design
 //!
 //! - **Separation of Planning and Deletion**: [`build_plan`] is strictly read-only.
-//!   It traverses the filesystem to capture a point-in-time snapshot and does not create,
-//!   modify, or delete any files or directories.
+//!   It records an in-memory plan from entries observed during traversal. The traversal is not
+//!   an atomic or protected filesystem snapshot and does not lock or prevent concurrent changes.
+//!   It does not create, modify, or delete any files or directories.
 //! - **Root Protection**: The processing root itself is never included in the plan,
 //!   and filesystem roots (such as `/` on Unix or `C:\` on Windows) are rejected to prevent
 //!   catastrophic deletion.
@@ -59,15 +60,14 @@
 //! use remove_except::build_plan;
 //! use std::fs::{self, File};
 //!
-//! // Set up a temporary directory structure:
-//! let temp_dir = std::env::temp_dir().join(format!("remove_except_example_{}", std::process::id()));
-//! let _ = fs::remove_dir_all(&temp_dir);
-//! fs::create_dir_all(temp_dir.join("src")).unwrap();
-//! File::create(temp_dir.join("src/main.rs")).unwrap();
-//! File::create(temp_dir.join("notes.txt")).unwrap();
+//! let temp_dir = assert_fs::TempDir::new().unwrap();
+//! let root = temp_dir.path();
+//! fs::create_dir_all(root.join("src")).unwrap();
+//! File::create(root.join("src/main.rs")).unwrap();
+//! File::create(root.join("notes.txt")).unwrap();
 //!
 //! // Build a removal plan keeping only files inside `src/`:
-//! let plan = build_plan(&temp_dir, &["src/**".to_owned()])
+//! let plan = build_plan(root, &["src/**".to_owned()])
 //!     .expect("valid root and keep patterns");
 //!
 //! // The plan identifies kept items and ancestors:
@@ -76,9 +76,6 @@
 //!
 //! // Deletion roots identify top-level removal targets:
 //! assert!(plan.delete_roots().iter().any(|item| item.relative_path() == "notes.txt"));
-//!
-//! // Clean up temporary fixtures:
-//! let _ = fs::remove_dir_all(&temp_dir);
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -122,8 +119,9 @@ use pattern::compile_patterns;
 /// - **No Symlink Traversal**: Symbolic links beneath `root` are treated as individual leaf
 ///   items and are never followed.
 /// - **Root Exclusion**: The `root` directory itself is never included in the plan.
-/// - **Snapshot Semantics**: The returned plan represents a snapshot captured at scan time.
-///   Filesystem modifications occurring after plan construction are not automatically reflected.
+/// - **Observed Entries**: The plan contains entries observed during traversal. The traversal
+///   is not atomic and does not lock or prevent concurrent filesystem changes. The plan is not
+///   refreshed if the filesystem changes after construction.
 ///
 /// # Errors
 ///
@@ -145,20 +143,18 @@ use pattern::compile_patterns;
 /// use remove_except::build_plan;
 /// use std::fs::{self, File};
 ///
-/// let temp_dir = std::env::temp_dir().join(format!("build_plan_test_{}", std::process::id()));
-/// let _ = fs::remove_dir_all(&temp_dir);
-/// fs::create_dir_all(temp_dir.join("docs")).unwrap();
-/// File::create(temp_dir.join("docs/guide.md")).unwrap();
-/// File::create(temp_dir.join("temp.log")).unwrap();
+/// let temp_dir = assert_fs::TempDir::new().unwrap();
+/// let root = temp_dir.path();
+/// fs::create_dir_all(root.join("docs")).unwrap();
+/// File::create(root.join("docs/guide.md")).unwrap();
+/// File::create(root.join("temp.log")).unwrap();
 ///
-/// let plan = build_plan(&temp_dir, &["docs/**".to_owned()])
+/// let plan = build_plan(root, &["docs/**".to_owned()])
 ///     .expect("plan construction should succeed");
 ///
 /// assert_eq!(plan.direct_match_count(), 1);
 /// assert!(plan.keep_items().iter().any(|item| item.relative_path() == "docs/guide.md"));
 /// assert!(plan.delete_roots().iter().any(|item| item.relative_path() == "temp.log"));
-///
-/// let _ = fs::remove_dir_all(&temp_dir);
 /// ```
 pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
     if patterns.is_empty() {
