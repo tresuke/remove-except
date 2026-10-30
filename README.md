@@ -14,28 +14,28 @@ This tool permanently deletes files and directories. Back up important data befo
 
 ### Prebuilt Binaries
 
-The `v0.3.0` [GitHub Release](https://github.com/tresuke/remove-except/releases/tag/v0.3.0) provides prebuilt binaries for Windows x64 and Linux x64. The older `v0.2.4` release provides source code only.
+The `v0.4.0` [GitHub Release](https://github.com/tresuke/remove-except/releases/tag/v0.4.0) provides prebuilt binaries for Windows x64 and Linux x64. The older `v0.2.4` release provides source code only.
 
 Download the archive for your platform and its matching checksum from that Release's **Assets**:
 
 | Platform | Archive | SHA-256 file |
 | --- | --- | --- |
-| Windows x64 (MSVC) | `remove-except-v0.3.0-x86_64-pc-windows-msvc.zip` | `remove-except-v0.3.0-x86_64-pc-windows-msvc.zip.sha256` |
-| Linux x64 (GNU) | `remove-except-v0.3.0-x86_64-unknown-linux-gnu.tar.gz` | `remove-except-v0.3.0-x86_64-unknown-linux-gnu.tar.gz.sha256` |
+| Windows x64 (MSVC) | `remove-except-v0.4.0-x86_64-pc-windows-msvc.zip` | `remove-except-v0.4.0-x86_64-pc-windows-msvc.zip.sha256` |
+| Linux x64 (GNU) | `remove-except-v0.4.0-x86_64-unknown-linux-gnu.tar.gz` | `remove-except-v0.4.0-x86_64-unknown-linux-gnu.tar.gz.sha256` |
 
 The Linux binary is built in Ubuntu 22.04 and requires glibc 2.35 or later. Ubuntu is the supported Linux platform; the glibc requirement alone does not guarantee compatibility with other distributions. macOS, ARM64, and musl binaries are not included. Prebuilt binaries do not require a Rust toolchain.
 
 Before extracting or running the binary, verify the archive's SHA-256. On Windows, compare the hash from `Get-FileHash` with the first field in the checksum file (case-insensitive); do not continue if they differ:
 
 ```powershell
-Get-FileHash .\remove-except-v0.3.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256
-Get-Content .\remove-except-v0.3.0-x86_64-pc-windows-msvc.zip.sha256
+Get-FileHash .\remove-except-v0.4.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256
+Get-Content .\remove-except-v0.4.0-x86_64-pc-windows-msvc.zip.sha256
 ```
 
 On Ubuntu, place the archive and checksum in the same directory and run:
 
 ```sh
-sha256sum --check remove-except-v0.3.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum --check remove-except-v0.4.0-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
 Also verify the archive's GitHub Actions build provenance with GitHub CLI, replacing `<archive-path>` with the downloaded archive's path:
@@ -49,24 +49,24 @@ The attestation is registered with GitHub, not supplied as a separate Release as
 After verification, extract the archive:
 
 ```powershell
-Expand-Archive -LiteralPath .\remove-except-v0.3.0-x86_64-pc-windows-msvc.zip -DestinationPath .\remove-except-v0.3.0
+Expand-Archive -LiteralPath .\remove-except-v0.4.0-x86_64-pc-windows-msvc.zip -DestinationPath .\remove-except-v0.4.0
 ```
 
 ```sh
-tar -xzf remove-except-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf remove-except-v0.4.0-x86_64-unknown-linux-gnu.tar.gz
 ```
 
 Each archive contains a platform-named directory with `remove-except.exe` (Windows) or `remove-except` (Ubuntu), both READMEs, and both project licenses. Add the directory containing the executable to `PATH`, then check `remove-except --version`.
 
 ### Install from Source
 
-Install Rust 1.88 or later, then install from the published `v0.3.0` tag:
+Install Rust 1.88 or later, then install from the published `v0.4.0` tag:
 
 ```sh
-cargo install --git https://github.com/tresuke/remove-except --tag v0.3.0 --locked
+cargo install --git https://github.com/tresuke/remove-except --tag v0.4.0 --locked
 ```
 
-To install the development version, omit the tag and use the latest default-branch source. It may differ from the published `v0.3.0` release:
+To install the development version, omit the tag and use the latest default-branch source. It may differ from the published `v0.4.0` release:
 
 ```sh
 cargo install --git https://github.com/tresuke/remove-except --locked

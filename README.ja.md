@@ -14,28 +14,28 @@
 
 ### ビルド済みバイナリー
 
-`v0.3.0` の [GitHub Release](https://github.com/tresuke/remove-except/releases/tag/v0.3.0) では、Windows x64／Linux x64 向けのビルド済みバイナリーを提供しています。以前の `v0.2.4` リリースはソースコードのみを提供します。
+`v0.4.0` の [GitHub Release](https://github.com/tresuke/remove-except/releases/tag/v0.4.0) では、Windows x64／Linux x64 向けのビルド済みバイナリーを提供しています。以前の `v0.2.4` リリースはソースコードのみを提供します。
 
 上記 Release の **Assets** から、利用環境に合うアーカイブと対応するチェックサムを取得してください。
 
 | 対象 | アーカイブ | SHA-256 ファイル |
 | --- | --- | --- |
-| Windows x64（MSVC） | `remove-except-v0.3.0-x86_64-pc-windows-msvc.zip` | `remove-except-v0.3.0-x86_64-pc-windows-msvc.zip.sha256` |
-| Linux x64（GNU） | `remove-except-v0.3.0-x86_64-unknown-linux-gnu.tar.gz` | `remove-except-v0.3.0-x86_64-unknown-linux-gnu.tar.gz.sha256` |
+| Windows x64（MSVC） | `remove-except-v0.4.0-x86_64-pc-windows-msvc.zip` | `remove-except-v0.4.0-x86_64-pc-windows-msvc.zip.sha256` |
+| Linux x64（GNU） | `remove-except-v0.4.0-x86_64-unknown-linux-gnu.tar.gz` | `remove-except-v0.4.0-x86_64-unknown-linux-gnu.tar.gz.sha256` |
 
 Linux版は Ubuntu 22.04 内でビルドし、glibc 2.35 以降が必要です。サポートする Linux 環境は Ubuntu であり、glibc の条件だけで他のディストリビューションとの互換性を保証するものではありません。macOS、ARM64、musl 向けバイナリーは含みません。ビルド済みバイナリーの利用に Rust toolchain は不要です。
 
 展開・実行前に、アーカイブの SHA-256 を確認してください。Windows では `Get-FileHash` のハッシュとチェックサムファイルの先頭の値を、大文字と小文字を区別せず比較します。一致しない場合は先へ進まないでください。
 
 ```powershell
-Get-FileHash .\remove-except-v0.3.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256
-Get-Content .\remove-except-v0.3.0-x86_64-pc-windows-msvc.zip.sha256
+Get-FileHash .\remove-except-v0.4.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256
+Get-Content .\remove-except-v0.4.0-x86_64-pc-windows-msvc.zip.sha256
 ```
 
 Ubuntu ではアーカイブとチェックサムを同じディレクトリーに置き、次を実行します。
 
 ```sh
-sha256sum --check remove-except-v0.3.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum --check remove-except-v0.4.0-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
 GitHub Actions のビルド来歴証明も GitHub CLI で確認してください。`<archive-path>` は取得したアーカイブのパスに置き換えます。
@@ -49,24 +49,24 @@ gh attestation verify <archive-path> --repo tresuke/remove-except --signer-workf
 検証後、アーカイブを展開します。
 
 ```powershell
-Expand-Archive -LiteralPath .\remove-except-v0.3.0-x86_64-pc-windows-msvc.zip -DestinationPath .\remove-except-v0.3.0
+Expand-Archive -LiteralPath .\remove-except-v0.4.0-x86_64-pc-windows-msvc.zip -DestinationPath .\remove-except-v0.4.0
 ```
 
 ```sh
-tar -xzf remove-except-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf remove-except-v0.4.0-x86_64-unknown-linux-gnu.tar.gz
 ```
 
 各アーカイブには、対象名を含むディレクトリー内に `remove-except.exe`（Windows）または `remove-except`（Ubuntu）、両 README、両プロジェクトライセンスが入っています。実行ファイルがあるディレクトリーを `PATH` に追加し、`remove-except --version` で確認してください。
 
 ### ソースからのインストール
 
-Rust 1.88 以降を用意し、公開済みの `v0.3.0` タグを指定してインストールします。
+Rust 1.88 以降を用意し、公開済みの `v0.4.0` タグを指定してインストールします。
 
 ```sh
-cargo install --git https://github.com/tresuke/remove-except --tag v0.3.0 --locked
+cargo install --git https://github.com/tresuke/remove-except --tag v0.4.0 --locked
 ```
 
-開発版を利用する場合は、タグを指定せず、既定ブランチの最新ソースからインストールします。公開済みの `v0.3.0` とは内容が異なる場合があります。
+開発版を利用する場合は、タグを指定せず、既定ブランチの最新ソースからインストールします。公開済みの `v0.4.0` とは内容が異なる場合があります。
 
 ```sh
 cargo install --git https://github.com/tresuke/remove-except --locked
