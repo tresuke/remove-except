@@ -11,10 +11,10 @@ pub enum ItemType {
     Symlink,
 }
 
-/// A filesystem item in the removal plan, captured at scan time.
+/// A filesystem item observed during the traversal that created a removal plan.
 ///
-/// Instances of this struct represent a point-in-time snapshot. They are not
-/// automatically updated or revalidated if filesystem contents change after planning.
+/// The traversal is not atomic. Instances are not automatically updated or revalidated if
+/// filesystem contents change during or after planning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedItem {
     /// Absolute path to the item, resolved under the normalized root.
