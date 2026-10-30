@@ -78,7 +78,7 @@ The scripts create or overwrite known fixture files. They replace `keep-link` on
 
 ## Public Library API
 
-Publication of the public library API reference on docs.rs is planned, but it is not available yet. See “Run and Validate” for generating the API documentation locally. The crate's `build_plan(root, patterns)` function creates a `RemovalPlan` for a processing directory and keep patterns.
+The [API documentation for published version 0.4.0](https://docs.rs/remove-except/0.4.0/remove_except/) is available on docs.rs. The development API may differ from published version 0.4.0. See “Run and Validate” for generating the API documentation locally. The crate's `build_plan(root, patterns)` function creates a `RemovalPlan` for a processing directory and keep patterns.
 
 It returns an error for missing or empty patterns, invalid globs, absolute patterns outside the selected directory, parent traversal, filesystem roots, non-directory roots, Windows drive-relative paths, and roots that cannot be resolved. Input validation errors can be identified with `anyhow::Error::downcast_ref::<ValidationError>()`; filesystem errors during scanning are not `ValidationError`s. `.` and `./` represent the selected root and keep everything beneath it.
 
