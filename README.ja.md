@@ -74,7 +74,15 @@ cargo install --git https://github.com/tresuke/remove-except --locked
 
 リポジトリーを clone した場合は、リポジトリー直下で `cargo install --path . --locked` を実行してインストールすることもできます。以前のソースのみのリリースを使う場合は、代わりに `--tag v0.2.4` を指定してください。stdin パターン、JSON 出力、終了コード `2` と `3`、1行単位の確認、ビューアー、最終確認前の要点再掲は含まれません。
 
-crates.io パッケージは提供していません。`cargo install remove-except` は利用できるインストール方法ではありません。
+### crates.io からのインストール
+
+この案内は crates.io での公開完了を示すものではありません。[remove-except 0.4.0 のページ](https://crates.io/crates/remove-except/0.4.0)で公開状況を確認してください。未公開の場合、この方法は利用できません。上記の Git タグ指定の方法を利用してください。
+
+crates.io で `0.4.0` が公開済みの場合は、Rust 1.88 以降を用意し、次のコマンドでインストールできます。
+
+```sh
+cargo install remove-except --version '=0.4.0' --locked
+```
 
 ## クイックスタート
 
