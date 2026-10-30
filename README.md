@@ -74,7 +74,15 @@ cargo install --git https://github.com/tresuke/remove-except --locked
 
 You can also clone the repository and install from its top-level directory with `cargo install --path . --locked`. To install the older source-only release, use `--tag v0.2.4` instead; it does not include stdin patterns, JSON output, exit codes `2` and `3`, whole-line confirmation, the viewer, or the final-confirmation recap.
 
-A crates.io package is not provided. `cargo install remove-except` is not an available installation method.
+### Install from crates.io
+
+These instructions do not indicate that publication on crates.io is complete. Check the [remove-except 0.4.0 page](https://crates.io/crates/remove-except/0.4.0) for publication status. If it has not been published, this installation method is unavailable; use the Git-tag installation method above instead.
+
+If version `0.4.0` is published on crates.io, install Rust 1.88 or later and run:
+
+```sh
+cargo install remove-except --version '=0.4.0' --locked
+```
 
 ## Quick Start
 
