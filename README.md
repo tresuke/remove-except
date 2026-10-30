@@ -76,9 +76,7 @@ You can also clone the repository and install from its top-level directory with 
 
 ### Install from crates.io
 
-These instructions do not indicate that publication on crates.io is complete. Check the [remove-except 0.4.0 page](https://crates.io/crates/remove-except/0.4.0) for publication status. If it has not been published, this installation method is unavailable; use the Git-tag installation method above instead.
-
-If version `0.4.0` is published on crates.io, install Rust 1.88 or later and run:
+[remove-except 0.4.0](https://crates.io/crates/remove-except/0.4.0) is published on crates.io. Install Rust 1.88 or later and run:
 
 ```sh
 cargo install remove-except --version '=0.4.0' --locked
@@ -462,4 +460,4 @@ This project is dual-licensed. You may choose either `LICENSE-MIT` or `LICENSE-A
 
 For development instructions, see the [Development Guide (Japanese, primary)](https://github.com/tresuke/remove-except/blob/main/DEVELOPMENT.ja.md) or its [English translation](https://github.com/tresuke/remove-except/blob/main/DEVELOPMENT.md).
 
-Publication of the public library API reference on docs.rs is planned, but it is not available yet.
+The [API documentation for published version 0.4.0](https://docs.rs/remove-except/0.4.0/remove_except/) is available on docs.rs. The development API may differ from published version 0.4.0.

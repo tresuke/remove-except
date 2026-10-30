@@ -78,7 +78,7 @@ cargo run --manifest-path ../Cargo.toml -- --dry-run keep.txt keep '*.md'
 
 ## 公開ライブラリー API
 
-公開ライブラリー API の docs.rs での公開は将来の予定であり、現時点では公開していません。ローカルで API ドキュメントを生成する方法は「実行と検証」を参照してください。crate の `build_plan(root, patterns)` 関数は、処理対象ディレクトリーと保持パターンから `RemovalPlan` を作成します。
+[公開版 0.4.0 の API ドキュメント](https://docs.rs/remove-except/0.4.0/remove_except/)は docs.rs で閲覧できます。開発版の API は公開版 0.4.0 と異なる場合があります。ローカルで API ドキュメントを生成する方法は「実行と検証」を参照してください。crate の `build_plan(root, patterns)` 関数は、処理対象ディレクトリーと保持パターンから `RemovalPlan` を作成します。
 
 パターンがない、または空である場合、glob が無効な場合、処理対象外の絶対パターンや親ディレクトリーへの移動がある場合、処理対象がファイルシステム最上位のディレクトリーまたはディレクトリー以外の場合、Windows の drive-relative path が指定された場合、処理対象を解決できない場合はエラーになります。入力検証エラーは `anyhow::Error::downcast_ref::<ValidationError>()` で識別できます。走査中のファイルシステムエラーは `ValidationError` ではありません。`.` と `./` は処理対象ディレクトリーを表し、その配下全体を保持します。
 

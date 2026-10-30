@@ -76,9 +76,7 @@ cargo install --git https://github.com/tresuke/remove-except --locked
 
 ### crates.io からのインストール
 
-この案内は crates.io での公開完了を示すものではありません。[remove-except 0.4.0 のページ](https://crates.io/crates/remove-except/0.4.0)で公開状況を確認してください。未公開の場合、この方法は利用できません。上記の Git タグ指定の方法を利用してください。
-
-crates.io で `0.4.0` が公開済みの場合は、Rust 1.88 以降を用意し、次のコマンドでインストールできます。
+[remove-except 0.4.0](https://crates.io/crates/remove-except/0.4.0) は crates.io で公開済みです。Rust 1.88 以降を用意し、次のコマンドでインストールします。
 
 ```sh
 cargo install remove-except --version '=0.4.0' --locked
@@ -464,4 +462,4 @@ PowerShellでJSONを読み取る場合も、UTF-8として受け取る設定を�
 
 開発手順は[開発ガイド（日本語）](https://github.com/tresuke/remove-except/blob/main/DEVELOPMENT.ja.md)を参照してください。[English](https://github.com/tresuke/remove-except/blob/main/DEVELOPMENT.md)。
 
-公開ライブラリー API の docs.rs での公開は将来の予定であり、現時点では公開していません。
+[公開版 0.4.0 の API ドキュメント](https://docs.rs/remove-except/0.4.0/remove_except/)は docs.rs で閲覧できます。開発版の API は公開版 0.4.0 と異なる場合があります。
