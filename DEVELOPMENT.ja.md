@@ -56,6 +56,46 @@ cargo build --release
 
 依存更新やコード変更でより新しいコンパイラーが必要になった場合は、`rust-version`、CI の toolchain matrix、両 README の記載を合わせて見直します。Ubuntu のローカル検証には上記 Docker runner を使います。Ubuntu または WSL を直接使う場合も、Windows マウント上ではなく Linux ホームディレクトリー配下のリポジトリーコピーで Linux ネイティブの Cargo を実行してください。
 
+## CodeQL
+
+[CodeQL workflow](.github/workflows/codeql.yml) は Advanced setup で公式の既定 Rust code-scanning suite を Windows / Ubuntu のそれぞれで実行します。既存の Rust CI、MSRV 検証、必須チェックは変更しません。Default setup を同時に有効にしないでください。
+
+| イベント | 解析対象 |
+| --- | --- |
+| `pull_request` | main 宛て PR の merge commit |
+| `push` | main |
+| `schedule` | 毎週月曜日 05:23 UTC の main |
+| `workflow_dispatch` | 選択した ref。基準確認には main を使用 |
+
+週次・手動起動の導入確認は workflow が main に存在してから行います。古い進行中実行をキャンセルするのは同じ PR の更新時だけです。concurrency はイベント種別と ref で分離し、main push・週次・手動の進行中解析は中止しません。ただし保留中の実行は後続実行で置き換わり得るため、すべての commit の解析履歴を保証するものではありません。
+
+### 解析対象と結果の確認
+
+Rust stable を設置し、`build-mode: none` で抽出します。手動ビルド手順はありませんが、抽出器は Cargo、`build.rs`、手続きマクロを実行し得ます。[共有設定](.github/codeql/codeql-config.yml) を init の `config-file` 入力で読み込み、`target/**` を除外します。src・tests・benches は一律除外しません。各 host の条件付きコードを確認する補助であり、ファイル収録だけで全分岐・マクロの意味解析が完全とは判断しません。
+
+GitHub の **Actions → CodeQL** で各 OS のログ・抽出診断・アップロード処理を確認し、**Security → Code scanning** と PR のチェック・注釈で問題候補を確認します。category は `/language:rust/os:ubuntu-latest` と `/language:rust/os:windows-latest` に分離します。ジョブ成功、SARIF 登録、Code scanning 側チェックの結果は別々に確認してください。
+
+初回の導入 PR では main 基準が未確立の可能性があります。マージ後の main 解析が登録されてから PR の新規アラート表示を評価し、初回表示が全件新規になることやマージ可否を事前に断定しないでください。fork PR は GitHub の通常の承認・トークン制限に従い、起動や登録が制限された場合は未確認または失敗として記録します。`pull_request_target` や PAT で回避しません。
+
+GitHub に保存するのは SARIF です。`upload-database: false` により DB の自動アップロードを無効にし、追加の DB/debug/SARIF artifact 保存は行いません。DB 非公開の方針を維持するため、デバッグ artifact を生成する debug モードでの再実行は別途検討してください。
+
+### ローカル調査と保守
+
+アラートの commit と OS を揃え、CLI / bundle / query pack の版を実行ログと照合して新しいローカル DB を作成します。DB は収録時点のソースであり、コード変更後は再作成が必要です。DB・SARIF はリポジトリー外の未使用パスへ保存し、既存 DB を上書きしないでください。対応する公式 Rust パックを取得した後、次の形式で共有除外設定を使えます。山括弧のプレースホルダーは実際のパス・互換版に置き換えます。
+
+```sh
+codeql database create '<new-db-path>' --language=rust --build-mode=none --source-root=. --codescanning-config=.github/codeql/codeql-config.yml --threads=2 --ram=4096
+codeql database analyze '<new-db-path>' 'codeql/rust-queries@<compatible-version>:codeql-suites/rust-code-scanning.qls' --format=sarif-latest --output='<new-sarif-path>' --threads=2 --ram=4096
+```
+
+VS Code の CodeQL 拡張で新規 DB を開き、該当クエリー・ソース・経路を調べます。診断クエリーは alerts が0件でも raw results に結果がある場合があります。GitHub DB の自動取得に依存しません。ローカル解析成功は GitHub の権限・アップロード・PR 注釈を検証したことにはなりません。
+
+権限は `contents: read`、CodeQL job の `actions: read` と `security-events: write` に限定し、既定の `GITHUB_TOKEN` を使用します。checkout の認証情報保存は無効です。新しい secrets、PAT、`id-token: write`、`contents: write` は不要です。
+
+action は full SHA に固定し、`tools: linked` で対応する bundle を利用します。既存 Dependabot の更新候補を採用する前に、selected-actions の exact repository/ref 許可、linked bundle・クエリーの互換性、両 OS の解析を確認してください。必要な許可設定変更は別途承認し、根拠なく許可範囲を広げないでください。週次再実行だけでは固定した解析ツール・クエリーは更新されません。
+
+CodeQL はテスト・Clippy・`cargo audit`・削除仕様レビューの代替ではなく、検出0件は安全性の証明ではありません。アラート修正・dismiss、独自クエリー、DB 公開、Code scanning による必須チェック追加は別の変更として判断します。
+
 ## 手動 fixture
 
 `Prepare-Manual-Test.ps1` と `prepare-manual-test.sh` は `manual-test-workspace` に fixture を作成します。OS に合ったスクリプトをリポジトリーのルートから実行し、その後 fixture ディレクトリーに移動して `--manifest-path` 付きで CLI を実行します。
