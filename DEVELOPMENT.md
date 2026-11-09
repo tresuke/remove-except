@@ -56,6 +56,46 @@ cargo build --release
 
 If a dependency update or code change requires a newer compiler, reassess `rust-version`, the CI toolchain matrix, and both READMEs in the same change. Use the Docker runner above for local Ubuntu validation. When using Ubuntu or WSL directly, run Linux-native Cargo from a repository copy under the Linux home directory, not from a Windows-mounted worktree.
 
+## CodeQL
+
+The [CodeQL workflow](.github/workflows/codeql.yml) uses Advanced setup to run the official default Rust code-scanning suite separately on Windows and Ubuntu. It does not change the existing Rust CI, MSRV validation, or required checks. Do not enable Default setup alongside it.
+
+| Event | Analyzed source |
+| --- | --- |
+| `pull_request` | Merge commit of a PR targeting main |
+| `push` | main |
+| `schedule` | main every Monday at 05:23 UTC |
+| `workflow_dispatch` | Selected ref; use main to verify the baseline |
+
+Verify scheduled and manual execution after the workflow exists on main. Only updates to the same PR cancel older in-progress runs. Concurrency groups separate event types and refs; main push, scheduled, and manual analyses do not cancel in-progress runs. Pending runs can still be replaced by later runs, so this does not guarantee an analysis history for every commit.
+
+### Analysis Scope and Results
+
+The workflow installs Rust stable and extracts with `build-mode: none`. There is no manual build step, but the extractor can run Cargo, `build.rs`, and procedural macros. The init step loads the [shared configuration](.github/codeql/codeql-config.yml) through `config-file`, excluding `target/**`. It does not exclude src, tests, or benches wholesale. Separate hosts help inspect conditional code; file extraction alone does not establish complete semantic analysis of every branch or macro.
+
+Use GitHub **Actions → CodeQL** to inspect each OS's logs, extraction diagnostics, and upload processing. Review findings under **Security → Code scanning** and in PR checks and annotations. Categories are `/language:rust/os:ubuntu-latest` and `/language:rust/os:windows-latest`. Check job success, SARIF registration, and the Code scanning check result separately.
+
+The initial setup PR may lack a main baseline. Evaluate new PR alerts after the post-merge main analysis is registered; do not assume that every initial finding is new or guarantee whether merging is allowed. Fork PRs follow GitHub's normal approval and token restrictions. Record restricted execution or registration as unverified or failed; do not bypass restrictions with `pull_request_target` or a PAT.
+
+SARIF is saved to GitHub. `upload-database: false` disables automatic DB uploads, and the workflow adds no DB/debug/SARIF artifact storage. To maintain the no-DB-publication policy, separately assess reruns in debug mode, which can generate debugging artifacts.
+
+### Local Investigation and Maintenance
+
+Match the alert's commit and OS, compare CLI, bundle, and query pack versions with the run logs, and create a new local DB. A DB represents the source at extraction time and must be recreated after code changes. Save DBs and SARIF outside the repository at unused paths; do not overwrite existing DBs. After obtaining the compatible official Rust pack, use the shared exclusions as follows. Replace angle-bracket placeholders with actual paths and the compatible version.
+
+```sh
+codeql database create '<new-db-path>' --language=rust --build-mode=none --source-root=. --codescanning-config=.github/codeql/codeql-config.yml --threads=2 --ram=4096
+codeql database analyze '<new-db-path>' 'codeql/rust-queries@<compatible-version>:codeql-suites/rust-code-scanning.qls' --format=sarif-latest --output='<new-sarif-path>' --threads=2 --ram=4096
+```
+
+Open the new DB in the VS Code CodeQL extension to inspect the relevant query, source, and paths. Diagnostic queries may have raw results even when alerts show zero results. Do not rely on automatically downloading GitHub DBs. Successful local analysis does not verify GitHub permissions, uploads, or PR annotations.
+
+Permissions are limited to `contents: read`, plus `actions: read` and `security-events: write` in the CodeQL job, using the default `GITHUB_TOKEN`. Checkout does not persist credentials. No new secrets, PAT, `id-token: write`, or `contents: write` are needed.
+
+Actions are pinned to full SHAs, with `tools: linked` selecting the corresponding bundle. Before accepting existing Dependabot update proposals, verify the selected-actions policy's exact repository/ref allowance, linked bundle and query compatibility, and analysis on both OSs. Explicitly allow `github/codeql-action/init@<full-sha>` and `github/codeql-action/analyze@<full-sha>` individually; do not assume that a repository-root reference permits both subactions. Separately approve any necessary allowance changes; do not broaden permissions without evidence. Weekly reruns alone do not update pinned analysis tools or queries.
+
+CodeQL does not replace tests, Clippy, `cargo audit`, or deletion-specification review; zero findings do not prove safety. Treat alert fixes or dismissals, custom queries, DB publication, and additional Code scanning required checks as separate changes.
+
 ## Manual Fixtures
 
 `Prepare-Manual-Test.ps1` and `prepare-manual-test.sh` create fixtures in `manual-test-workspace`. Run the platform-appropriate script from the repository root, then enter the fixture directory and run the CLI with `--manifest-path`:

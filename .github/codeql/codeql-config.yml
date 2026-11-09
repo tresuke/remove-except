@@ -1,0 +1,4 @@
+name: remove-except Rust analysis
+
+paths-ignore:
+  - 'target/**'
