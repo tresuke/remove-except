@@ -92,7 +92,7 @@ VS Code の CodeQL 拡張で新規 DB を開き、該当クエリー・ソース
 
 権限は `contents: read`、CodeQL job の `actions: read` と `security-events: write` に限定し、既定の `GITHUB_TOKEN` を使用します。checkout の認証情報保存は無効です。新しい secrets、PAT、`id-token: write`、`contents: write` は不要です。
 
-action は full SHA に固定し、`tools: linked` で対応する bundle を利用します。既存 Dependabot の更新候補を採用する前に、selected-actions の exact repository/ref 許可、linked bundle・クエリーの互換性、両 OS の解析を確認してください。必要な許可設定変更は別途承認し、根拠なく許可範囲を広げないでください。週次再実行だけでは固定した解析ツール・クエリーは更新されません。
+action は full SHA に固定し、`tools: linked` で対応する bundle を利用します。既存 Dependabot の更新候補を採用する前に、selected-actions の exact repository/ref 許可、linked bundle・クエリーの互換性、両 OS の解析を確認してください。CodeQL は `github/codeql-action/init@<full-sha>` と `github/codeql-action/analyze@<full-sha>` を個別に許可し、リポジトリー直下の参照だけで許可されると仮定しないでください。必要な許可設定変更は別途承認し、根拠なく許可範囲を広げないでください。週次再実行だけでは固定した解析ツール・クエリーは更新されません。
 
 CodeQL はテスト・Clippy・`cargo audit`・削除仕様レビューの代替ではなく、検出0件は安全性の証明ではありません。アラート修正・dismiss、独自クエリー、DB 公開、Code scanning による必須チェック追加は別の変更として判断します。
 

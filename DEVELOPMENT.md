@@ -92,7 +92,7 @@ Open the new DB in the VS Code CodeQL extension to inspect the relevant query, s
 
 Permissions are limited to `contents: read`, plus `actions: read` and `security-events: write` in the CodeQL job, using the default `GITHUB_TOKEN`. Checkout does not persist credentials. No new secrets, PAT, `id-token: write`, or `contents: write` are needed.
 
-Actions are pinned to full SHAs, with `tools: linked` selecting the corresponding bundle. Before accepting existing Dependabot update proposals, verify the selected-actions policy's exact repository/ref allowance, linked bundle and query compatibility, and analysis on both OSs. Separately approve any necessary allowance changes; do not broaden permissions without evidence. Weekly reruns alone do not update pinned analysis tools or queries.
+Actions are pinned to full SHAs, with `tools: linked` selecting the corresponding bundle. Before accepting existing Dependabot update proposals, verify the selected-actions policy's exact repository/ref allowance, linked bundle and query compatibility, and analysis on both OSs. Explicitly allow `github/codeql-action/init@<full-sha>` and `github/codeql-action/analyze@<full-sha>` individually; do not assume that a repository-root reference permits both subactions. Separately approve any necessary allowance changes; do not broaden permissions without evidence. Weekly reruns alone do not update pinned analysis tools or queries.
 
 CodeQL does not replace tests, Clippy, `cargo audit`, or deletion-specification review; zero findings do not prove safety. Treat alert fixes or dismissals, custom queries, DB publication, and additional Code scanning required checks as separate changes.
 
