@@ -3,6 +3,440 @@ use assert_fs::prelude::*;
 
 mod support;
 
+#[test]
+fn modification_time_json_combines_patterns_and_preserves_input_order() {
+    use std::time::{Duration, SystemTime};
+    let temp = assert_fs::TempDir::new().unwrap();
+    for (name, seconds) in [
+        ("dir/keep.txt", 1_700_000_000),
+        ("dir/old.txt", 1_699_999_999),
+    ] {
+        let file = temp.child(name);
+        file.write_str("data").unwrap();
+        let handle = std::fs::OpenOptions::new()
+            .write(true)
+            .open(file.path())
+            .unwrap();
+        handle
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds))
+            .unwrap();
+    }
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--dry-run",
+            "--format",
+            "json",
+            "--patterns-from-stdin",
+            "--modified-since",
+            "2023-11-14T22:13:20Z",
+            "dir",
+        ])
+        .write_stdin("other\nother\n")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let plan = parse_json_stdout(&output);
+    assert_eq!(
+        plan["selection"],
+        serde_json::json!({
+            "patterns": ["dir", "other", "other"],
+            "modified_since": "2023-11-14T22:13:20Z",
+            "modified_before": null
+        })
+    );
+    assert_eq!(plan["direct_match_count"], 1);
+    assert_eq!(relative_paths(&plan, "keep_items"), ["dir", "dir/keep.txt"]);
+    assert_eq!(relative_paths(&plan, "delete_items"), ["dir/old.txt"]);
+    temp.child("dir/old.txt").assert("data");
+}
+
+#[test]
+fn modification_time_only_and_local_day_are_resolved_in_child_process() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("file.txt").write_str("data").unwrap();
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("TZ", "Asia/Tokyo")
+        .args([
+            "--dry-run",
+            "--format",
+            "json",
+            "--modified-since",
+            "2026-11-10",
+            "--modified-before",
+            "2026-11-11",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let plan = parse_json_stdout(&output);
+    assert_eq!(
+        plan["selection"],
+        serde_json::json!({
+            "patterns": [],
+            "modified_since": "2026-11-09T15:00:00Z",
+            "modified_before": "2026-11-10T15:00:00Z"
+        })
+    );
+    temp.child("file.txt").assert("data");
+}
+
+#[test]
+fn invalid_modification_times_never_output_or_delete() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("file.txt").write_str("data").unwrap();
+    for value in [
+        "2026-01-01T00:00:00.0Z",
+        "2026-01-01T00:00:00.001Z",
+        "2026-01-01T00:00:00.000000001Z",
+        "2026-01-01t00:00Z",
+        "2026-01-01T00:00z",
+        "2026-01-01T24:00Z",
+        "2026-01-01T00:00:60Z",
+        "2026-01-01T00:00-00:00",
+        "2026-01-01Z",
+        "2026-02-30",
+        "2026-01-01T00:00:00Z[UTC]",
+        "2026-01-01T00",
+        "2026-01-01T00:00:00+09:00:00",
+        " 2026-01-01",
+        "2026-01-01 ",
+        "1600-12-31T23:59:59Z",
+        "1599-12-31T23:59:59Z",
+        "9999-01-01T00:00:00Z",
+        "1601-01-01T00:00:00+09:00",
+    ] {
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .env("TZ", "UTC")
+            .args(["--force", "--modified-since", value])
+            .assert()
+            .code(2)
+            .get_output()
+            .clone();
+        assert!(output.stdout.is_empty(), "{value}");
+        temp.child("file.txt").assert("data");
+    }
+}
+
+#[test]
+fn invalid_or_repeated_modification_bounds_never_output_or_delete() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("file.txt").write_str("data").unwrap();
+    for args in [
+        [
+            "--modified-since",
+            "2026-01-01T00:00:00Z",
+            "--modified-before",
+            "2026-01-01T09:00:00+09:00",
+        ],
+        [
+            "--modified-since",
+            "2026-01-02T00:00:00Z",
+            "--modified-before",
+            "2026-01-01T00:00:00Z",
+        ],
+        [
+            "--modified-since",
+            "2026-01-01T00:00:00Z",
+            "--modified-since",
+            "2026-01-02T00:00:00Z",
+        ],
+        [
+            "--modified-before",
+            "2026-01-02T00:00:00Z",
+            "--modified-before",
+            "2026-01-03T00:00:00Z",
+        ],
+    ] {
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["--force", "--format", "json"])
+            .args(args)
+            .assert()
+            .code(2)
+            .get_output()
+            .clone();
+        assert!(output.stdout.is_empty(), "{args:?}");
+        assert!(!output.stderr.is_empty(), "{args:?}");
+        temp.child("file.txt").assert("data");
+    }
+}
+
+#[test]
+fn timezone_errors_and_ambiguous_local_times_fail_safely() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("file.txt").write_str("data").unwrap();
+    for (zone, value, code) in [
+        ("not-a-valid-zone", "2026-01-01", 1),
+        ("", "2026-01-01", 1),
+        ("America/New_York", "2026-03-08T02:30", 2),
+        ("America/New_York", "2026-11-01T01:30", 2),
+        ("America/Sao_Paulo", "2018-11-04", 2),
+        ("America/Havana", "2020-11-01", 2),
+    ] {
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .env("TZ", zone)
+            .args(["--force", "--modified-since", value])
+            .assert()
+            .code(code)
+            .get_output()
+            .clone();
+        assert!(output.stdout.is_empty(), "{zone:?} {value}");
+        temp.child("file.txt").assert("data");
+    }
+    for zone in ["", "not-a-valid-zone"] {
+        Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .env("TZ", zone)
+            .args(["--dry-run", "--modified-since", "1601-01-01T00:00:00Z"])
+            .assert()
+            .success();
+    }
+}
+
+#[test]
+fn local_days_follow_daylight_saving_transitions() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    for (since, before, expected_since, expected_before) in [
+        (
+            "2026-03-08",
+            "2026-03-09",
+            "2026-03-08T05:00:00Z",
+            "2026-03-09T04:00:00Z",
+        ),
+        (
+            "2026-11-01",
+            "2026-11-02",
+            "2026-11-01T04:00:00Z",
+            "2026-11-02T05:00:00Z",
+        ),
+    ] {
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .env("TZ", "America/New_York")
+            .args([
+                "--dry-run",
+                "--format",
+                "json",
+                "--modified-since",
+                since,
+                "--modified-before",
+                before,
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let plan = parse_json_stdout(&output);
+        assert_eq!(plan["selection"]["modified_since"], expected_since);
+        assert_eq!(plan["selection"]["modified_before"], expected_before);
+    }
+}
+
+#[test]
+fn modification_time_with_empty_or_invalid_stdin_and_recap() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("file.txt").write_str("data").unwrap();
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--dry-run",
+            "--format",
+            "json",
+            "--patterns-from-stdin",
+            "--modified-before",
+            "1601-01-01T00:00:00Z",
+        ])
+        .write_stdin("\n")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let plan = parse_json_stdout(&output);
+    assert_eq!(plan["selection"]["patterns"], serde_json::json!([]));
+    assert_eq!(plan["direct_match_count"], 0);
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--force",
+            "--patterns-from-stdin",
+            "--modified-since",
+            "1601-01-01T00:00:00Z",
+        ])
+        .write_stdin(vec![0xff])
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    assert!(output.stdout.is_empty());
+    temp.child("file.txt").assert("data");
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--pager",
+            "never",
+            "--modified-before",
+            "1601-01-01T00:00:00Z",
+        ])
+        .write_stdin("n\n")
+        .assert()
+        .code(3)
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    for text in [
+        "Modified since (inclusive): unbounded",
+        "Modified before (exclusive): 1601-01-01T00:00:00Z",
+    ] {
+        assert!(stdout.contains(text), "{text}");
+        assert!(stderr.contains(text), "{text}");
+    }
+    assert!(stderr.contains("No items matched the keep conditions"));
+    temp.child("file.txt").assert("data");
+}
+
+#[test]
+fn modification_time_summary_and_force_no_match_follow_keep_conditions() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("file.txt").write_str("data").unwrap();
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--dry-run",
+            "--pager",
+            "never",
+            "--summary",
+            "keep",
+            "--modified-before",
+            "1601-01-01T00:00:00Z",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("Modified before (exclusive): 1601-01-01T00:00:00Z"));
+    assert!(text.contains("0 direct matches"));
+    assert!(!text.contains("direct pattern matches"));
+    temp.child("file.txt").assert("data");
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--modified-before", "1601-01-01T00:00:00Z"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("No items matched the keep conditions")
+    );
+    assert!(!temp.path().join("file.txt").exists());
+}
+
+#[test]
+fn time_filter_does_not_keep_an_explicit_empty_directory() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("empty").create_dir_all().unwrap();
+    temp.child("keep.txt").write_str("inside").unwrap();
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--force",
+            "--modified-since",
+            "1601-01-01T00:00:00Z",
+            "empty",
+            "keep.txt",
+        ])
+        .assert()
+        .success();
+    assert!(!temp.path().join("empty").exists());
+    temp.child("keep.txt").assert("inside");
+}
+
+#[test]
+fn time_filter_does_not_keep_an_explicit_symlink() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let outside = assert_fs::TempDir::new().unwrap();
+    outside.child("target.txt").write_str("outside").unwrap();
+    temp.child("keep.txt").write_str("inside").unwrap();
+    let target = outside.path().join("target.txt");
+    let link = temp.path().join("link");
+    #[cfg(unix)]
+    let link_result = std::os::unix::fs::symlink(&target, &link);
+    #[cfg(windows)]
+    let link_result = std::os::windows::fs::symlink_file(&target, &link);
+    link_result.expect("creating the symbolic-link fixture is required for this test");
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--force",
+            "--modified-since",
+            "1601-01-01T00:00:00Z",
+            "link",
+            "keep.txt",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::symlink_metadata(&link).unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+    temp.child("keep.txt").assert("inside");
+    outside.child("target.txt").assert("outside");
+}
+
+#[cfg(unix)]
+#[test]
+fn time_filter_does_not_keep_special_files() {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let temp = assert_fs::TempDir::new().unwrap();
+    let fifo = temp.path().join("pipe");
+    let name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--dry-run",
+            "--format",
+            "json",
+            "--modified-since",
+            "1601-01-01T00:00:00Z",
+            ".",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let plan = parse_json_stdout(&output);
+    assert_eq!(plan["direct_match_count"], 0);
+    assert_eq!(relative_paths(&plan, "delete_items"), ["pipe"]);
+    assert!(fifo.exists());
+}
+
 #[cfg(unix)]
 #[path = "cli/pager_pty.rs"]
 mod pager_pty;
@@ -1309,7 +1743,7 @@ fn json_and_force_do_not_enter_viewer_or_emit_recap() {
             .get_output()
             .clone();
         let plan = parse_json_stdout(&output);
-        assert_eq!(plan["schema_version"], 1);
+        assert_eq!(plan["schema_version"], 2);
         assert!(!String::from_utf8_lossy(&output.stderr).contains("Review before deletion:"));
         let forced = Command::cargo_bin("remove-except")
             .unwrap()
@@ -1541,7 +1975,7 @@ fn json_dry_run_outputs_complete_plan_only() {
 
     let plan = parse_json_stdout(&output);
     let canonical_root = std::fs::canonicalize(temp.path()).unwrap();
-    assert_eq!(plan["schema_version"], 1);
+    assert_eq!(plan["schema_version"], 2);
     assert_eq!(plan["root"], canonical_root.to_str().unwrap());
     assert_eq!(plan["direct_match_count"], 1);
     assert_eq!(
@@ -2164,7 +2598,7 @@ fn help_documents_pipeline_options_and_exit_codes() {
 
     assert!(output.contains("--patterns-from-stdin"));
     assert!(output.contains("--format <FORMAT>"));
-    assert!(output.contains("schema_version 1"));
+    assert!(output.contains("schema_version 2"));
     assert!(output.contains("Exit codes:"));
     let confirmation_line = output
         .lines()

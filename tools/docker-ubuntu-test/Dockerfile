@@ -6,7 +6,7 @@ ENV RUSTUP_HOME=/usr/local/rustup
 ENV PATH=/usr/local/cargo/bin:${PATH}
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends ca-certificates curl build-essential \
+    && apt-get install --yes --no-install-recommends ca-certificates curl build-essential tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
