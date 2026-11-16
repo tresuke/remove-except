@@ -154,7 +154,7 @@ jobs:
       - name: Install build prerequisites
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install --yes ca-certificates curl git build-essential
+          DEBIAN_FRONTEND=noninteractive apt-get install --yes ca-certificates curl git build-essential tzdata
 
       - name: Check out tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
