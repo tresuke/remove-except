@@ -16,9 +16,9 @@
 
 ### ビルド済みバイナリー
 
-`v0.4.0` の [GitHub Release](https://github.com/tresuke/remove-except/releases/tag/v0.4.0) では、Windows x64／Linux x64 向けのビルド済みバイナリーを提供しています。以前の `v0.2.4` リリースはソースコードのみを提供します。`v0.5.0` のGitHub Releaseでは、公開後にWindows x64／Linux x64向けバイナリーを提供します。公開前に `v0.5.0` のアーカイブを取得することはできません。
+`v0.4.0` の [GitHub Release](https://github.com/tresuke/remove-except/releases/tag/v0.4.0) では、Windows x64／Linux x64 向けのビルド済みバイナリーを提供しています。以前の `v0.2.4` リリースはソースコードのみを提供します。`v0.5.1` のGitHub Releaseでは、公開後にWindows x64／Linux x64向けバイナリーを提供します。公開前に `v0.5.1` のアーカイブを取得することはできません。
 
-`v0.5.0` では更新日時オプションとJSON schema 2を利用できます。これらは公開済みの `v0.4.0` には含まれません。
+`v0.5.1` では更新日時オプションとJSON schema 2を利用できます。これらは公開済みの `v0.4.0` には含まれません。
 
 現在ダウンロードできる `v0.4.0` のアーカイブとチェックサムは、同Releaseの **Assets** から取得してください。
 
@@ -80,7 +80,7 @@ cargo install --git https://github.com/tresuke/remove-except --locked
 
 ### crates.io からのインストール
 
-[remove-except 0.4.0](https://crates.io/crates/remove-except/0.4.0) は crates.io で公開済みです。今回 `v0.5.0` は crates.io では公開しません。Rust 1.88 以降を用意し、次のコマンドでインストールします。
+[remove-except 0.4.0](https://crates.io/crates/remove-except/0.4.0) は crates.io で公開済みです。今回 `v0.5.1` は crates.io では公開しません。Rust 1.88 以降を用意し、次のコマンドでインストールします。
 
 ```sh
 cargo install remove-except --version '=0.4.0' --locked
@@ -460,7 +460,7 @@ PowerShellでJSONを読み取る場合も、UTF-8として受け取る設定を�
 
 ## バージョンと互換性
 
-### v0.4.0 から v0.5.0 への更新
+### v0.4.0 から v0.5.1 への更新
 
 - `--modified-since`（指定時刻を含む）と `--modified-before`（指定時刻を含まない）で更新日時を条件にできるようになりました。パターン条件と日時範囲はAND条件です。日時条件に直接一致するのは通常ファイルだけで、条件に一致するファイルがない場合や、明示したリンク・空ディレクトリーは削除対象になり得ます。実行前に `--summary` なしの `--dry-run` で全項目を確認してください。
 - JSONはschema 2になりました。schema 1を前提にする利用側は更新が必要です。ライブラリーには `build_plan_with_options` と `ModifiedRange` を追加しています。
