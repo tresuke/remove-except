@@ -1,5 +1,6 @@
 //! Displays a keep/deletion plan beneath the current directory and deletes items after confirmation.
 
+mod datetime;
 mod pager;
 
 use std::fmt;
@@ -13,13 +14,15 @@ use anyhow::{Context, Result};
 use clap::builder::styling::{AnsiColor, Styles};
 use clap::{CommandFactory, Parser, ValueEnum};
 use console::style;
-use remove_except::{ItemType, PlannedItem, RemovalPlan, ValidationError, build_plan};
+use remove_except::{
+    ItemType, PlanOptions, PlannedItem, RemovalPlan, ValidationError, build_plan_with_options,
+};
 use serde::Serialize;
 
 const EXIT_RUNTIME_ERROR: u8 = 1;
 const EXIT_INVALID_INPUT: u8 = 2;
 const EXIT_NOT_EXECUTED: u8 = 3;
-const JSON_SCHEMA_VERSION: u32 = 1;
+const JSON_SCHEMA_VERSION: u32 = 2;
 
 const HELP_STYLES: Styles = Styles::styled()
     .header(AnsiColor::Cyan.on_default().bold())
@@ -31,8 +34,8 @@ const HELP_STYLES: Styles = Styles::styled()
 #[command(
     version,
     about = "Keep matching items and remove the rest under a processing root",
-    long_about = "Keep items matching one or more paths or glob patterns and remove the rest under the selected root. Multiple patterns are combined with OR. Always review the plan before deleting items. The normalized root and scanned entry paths must be representable as Unicode. Otherwise, nothing is printed to stdout or deleted (exit code 1), even with --force.",
-    after_long_help = "Output:\n  Tree: directories end with / and symlinks with @. With color, directories are blue, symlinks cyan, and kept parent directories in the delete tree green. Without color, kept parents end with +.\n  Flat: ItemType identifies each entry. Without color, directory and symlink paths end with / and @. Flat output has no kept-parent marker.\n  Status labels: NO REMOVALS (green) when there are no deletion operations; otherwise PREVIEW ONLY (cyan) for dry runs, CONFIRM TO DELETE (yellow) when confirmation is required, FORCE DELETE (red) with --force.\n  Colors are used automatically when output is a terminal and color is available.\n\nViewer:\n  --pager auto (default) pages long human output on supported terminals in normal and dry runs. JSON and --force bypass it. --pager always conflicts with JSON and --force; --pager never uses normal output.\n  Up/Down scroll, PageUp/PageDown page, Home/End move to the beginning/end, Tab/Shift+Tab switch sections. Long paths wrap without truncation. c finishes viewing; q/Esc/Ctrl+C cancel (code 3). Enter and y never approve deletion in the viewer.\n  Pending viewer input is discarded before a separate whole-line terminal confirmation. Only a newline-terminated y/yes confirms (case-insensitive, surrounding whitespace ignored); anything else or EOF cancels.\n  Auto explains unavailable-terminal fallback on stderr; always fails with code 1. Terminal errors after startup stop without deletion. Human final confirmation repeats root, counts, and applicable warnings on stderr.\n\nPipelines:\n  --patterns-from-stdin reads one UTF-8 pattern per line (LF or CRLF). A leading BOM is removed, empty lines are ignored, other whitespace is kept, and # has no special meaning. Invalid UTF-8 or NUL characters (for example, UTF-16 input) are rejected. Confirmation is then read from the terminal; without one, nothing is deleted.\n  --format json writes exactly one JSON object (schema_version 1) with root, direct_match_count, keep_items, delete_items, and delete_roots to stdout. Messages and prompts go to stderr. New fields may be added without changing schema_version.\n\nExit codes:\n  0 plan shown or deletion completed; 1 runtime error (including viewer errors); 2 invalid arguments, input, root, or patterns; 3 nothing deleted because viewing was cancelled or confirmation was declined or unavailable.",
+    long_about = "Keep items matching paths or glob patterns and/or modification-time bounds and remove the rest under the selected root. Multiple patterns are combined with OR; the time range is combined with AND. Time filtering keeps only regular files and their ancestors. Always review the plan before deleting items. The normalized root and scanned entry paths must be representable as Unicode. Otherwise, nothing is printed to stdout or deleted (exit code 1), even with --force.",
+    after_long_help = "Output:\n  Tree: directories end with / and symlinks with @. With color, directories are blue, symlinks cyan, and kept parent directories in the delete tree green. Without color, kept parents end with +.\n  Flat: ItemType identifies each entry. Without color, directory and symlink paths end with / and @. Flat output has no kept-parent marker.\n  Status labels: NO REMOVALS (green) when there are no deletion operations; otherwise PREVIEW ONLY (cyan) for dry runs, CONFIRM TO DELETE (yellow) when confirmation is required, FORCE DELETE (red) with --force.\n  Colors are used automatically when output is a terminal and color is available.\n\nViewer:\n  --pager auto (default) pages long human output on supported terminals in normal and dry runs. JSON and --force bypass it. --pager always conflicts with JSON and --force; --pager never uses normal output.\n  Up/Down scroll, PageUp/PageDown page, Home/End move to the beginning/end, Tab/Shift+Tab switch sections. Long paths wrap without truncation. c finishes viewing; q/Esc/Ctrl+C cancel (code 3). Enter and y never approve deletion in the viewer.\n  Pending viewer input is discarded before a separate whole-line terminal confirmation. Only a newline-terminated y/yes confirms (case-insensitive, surrounding whitespace ignored); anything else or EOF cancels.\n  Auto explains unavailable-terminal fallback on stderr; always fails with code 1. Terminal errors after startup stop without deletion. Human final confirmation repeats root, counts, and applicable warnings on stderr.\n\nModification times:\n  --modified-since is inclusive and --modified-before is exclusive; either may be used alone. Accept YYYY-MM-DD, YYYY-MM-DDTHH:MM[:SS], or YYYY-MM-DD HH:MM[:SS]. Date-times may include Z or +/-HH:MM. Date-only and offset-free date-times use local time. Fractional seconds and ambiguous local times are rejected. Only matching regular files and their ancestors are kept; links and empty directories may be deleted.\n\nPipelines:\n  --patterns-from-stdin reads one UTF-8 pattern per line (LF or CRLF). A leading BOM is removed, empty lines are ignored, other whitespace is kept, and # has no special meaning. Invalid UTF-8 or NUL characters (for example, UTF-16 input) are rejected. Confirmation is then read from the terminal; without one, nothing is deleted.\n  --format json writes exactly one JSON object (schema_version 2) with root, direct_match_count, selection, keep_items, delete_items, and delete_roots to stdout. Messages and prompts go to stderr. New fields may be added without changing schema_version.\n\nExit codes:\n  0 plan shown or deletion completed; 1 runtime error (including viewer errors); 2 invalid arguments, input, root, or patterns; 3 nothing deleted because viewing was cancelled or confirmation was declined or unavailable.",
     styles = HELP_STYLES
 )]
 struct Args {
@@ -58,6 +61,20 @@ struct Args {
         help = "Also read keep patterns from standard input, one per line"
     )]
     patterns_from_stdin: bool,
+
+    #[arg(
+        long,
+        value_name = "DATE_TIME",
+        help = "Keep regular files modified at or after this time"
+    )]
+    modified_since: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "DATE_TIME",
+        help = "Keep regular files modified before this time"
+    )]
+    modified_before: Option<String>,
 
     #[arg(
         long,
@@ -100,8 +117,8 @@ struct Args {
     sort_by_type: bool,
 
     #[arg(
-        required_unless_present = "patterns_from_stdin",
-        num_args = 1..,
+        required_unless_present_any = ["patterns_from_stdin", "modified_since", "modified_before"],
+        num_args = 0..,
         value_name = "KEEP_PATTERN",
         help = "Paths or glob patterns to keep (* matches one level, ? one Unicode scalar, ** recurses); any match keeps an item"
     )]
@@ -162,6 +179,7 @@ struct PlanDisplayOptions {
     direct_match_count: usize,
     delete_root_count: usize,
     colors_enabled: bool,
+    modified: bool,
 }
 
 /// Result of a run that did not fail.
@@ -247,7 +265,19 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
 }
 
 fn run(args: Args) -> Result<Outcome> {
+    run_with_plan_builder(args, build_plan_with_options, &mut io::stdout())
+}
+
+fn run_with_plan_builder(
+    args: Args,
+    build_plan: impl FnOnce(&Path, &[String], &PlanOptions) -> Result<RemovalPlan>,
+    output: &mut impl Write,
+) -> Result<Outcome> {
     let json = args.format == OutputFormat::Json;
+    let selection = datetime::resolve(
+        args.modified_since.as_deref(),
+        args.modified_before.as_deref(),
+    )?;
     let mut patterns = args.patterns;
     if args.patterns_from_stdin {
         let stdin = io::stdin();
@@ -265,17 +295,22 @@ fn run(args: Args) -> Result<Outcome> {
     }
     let current_dir = std::env::current_dir().context("Failed to get current directory")?;
     let root = resolve_root(&current_dir, args.root)?;
-    let plan = build_plan(&root, &patterns)?;
+    let plan = build_plan(&root, &patterns, &selection.options)?;
     // Serialize before printing anything so an unrepresentable path never yields partial JSON.
     let json_plan = if json {
-        Some(json_plan_text(&plan)?)
+        Some(json_plan_text(&plan, &patterns, &selection)?)
     } else {
         None
     };
 
     if plan.direct_match_count() == 0 {
+        let conditions = if selection.is_active() {
+            "keep conditions"
+        } else {
+            "keep patterns"
+        };
         eprintln!(
-            "WARNING: No items matched the keep patterns. Everything under {} would be removed.",
+            "WARNING: No items matched the {conditions}. Everything under {} would be removed.",
             escape_control_characters(&display_root_path(plan.root()))
         );
     }
@@ -288,12 +323,11 @@ fn run(args: Args) -> Result<Outcome> {
     };
     let mut viewed = false;
     if let Some(json_plan) = json_plan {
-        let mut output = io::stdout().lock();
         output.write_all(json_plan.as_bytes())?;
         output.flush()?;
     } else if args.pager != PagerMode::Never && !args.force {
         let mut text = Vec::new();
-        let sections = render_plan(
+        let sections = render_plan_with_selection(
             &mut text,
             &plan,
             args.dry_run,
@@ -303,6 +337,7 @@ fn run(args: Args) -> Result<Outcome> {
             args.layout == Some(Layout::Flat),
             args.sort_by_type,
             io::stdout().is_terminal() && console::colors_enabled(),
+            Some(&selection),
         )?;
         let document = pager::Document {
             text: String::from_utf8(text).context("Human plan is not valid UTF-8")?,
@@ -336,18 +371,16 @@ fn run(args: Args) -> Result<Outcome> {
                     .context("Failed to display the plan viewer")?
                     == pager::ViewerOutcome::Cancelled
                 {
-                    report_status(false, "Aborted.");
+                    report_status(output, false, "Aborted.")?;
                     return Ok(Outcome::NotExecuted);
                 }
             }
             Ok(_) => {
-                let mut output = io::stdout().lock();
                 output.write_all(document.text.as_bytes())?;
                 output.flush()?;
             }
             Err(error) if args.pager == PagerMode::Auto => {
                 eprintln!("Viewer unavailable: {error}. Using normal output.");
-                let mut output = io::stdout().lock();
                 output.write_all(document.text.as_bytes())?;
                 output.flush()?;
             }
@@ -355,6 +388,7 @@ fn run(args: Args) -> Result<Outcome> {
         }
     } else {
         print_plan(
+            output,
             &plan,
             args.dry_run,
             args.force,
@@ -362,6 +396,7 @@ fn run(args: Args) -> Result<Outcome> {
             delete_summary,
             args.layout == Some(Layout::Flat),
             args.sort_by_type,
+            &selection,
         )?;
     }
 
@@ -372,11 +407,12 @@ fn run(args: Args) -> Result<Outcome> {
     if !args.force {
         let has_summaries = keep_summary || delete_summary;
         if !json {
-            write_confirmation_recap(
+            write_confirmation_recap_with_selection(
                 &mut io::stderr().lock(),
                 &plan,
                 has_summaries,
                 io::stderr().is_terminal() && console::colors_enabled_stderr(),
+                Some(&selection),
             )?;
         }
         let confirmed = if args.patterns_from_stdin || viewed {
@@ -393,7 +429,7 @@ fn run(args: Args) -> Result<Outcome> {
             confirm_deletion(has_summaries)?
         };
         if !confirmed {
-            report_status(json, "Aborted.");
+            report_status(output, json, "Aborted.")?;
             return Ok(Outcome::NotExecuted);
         }
     }
@@ -407,16 +443,17 @@ fn run(args: Args) -> Result<Outcome> {
         })?;
     }
 
-    report_status(json, "Removal complete.");
+    report_status(output, json, "Removal complete.")?;
     Ok(Outcome::Completed)
 }
 
 /// Writes a final status message, keeping stdout reserved for JSON in JSON mode.
-fn report_status(json: bool, message: &str) {
+fn report_status(output: &mut impl Write, json: bool, message: &str) -> io::Result<()> {
     if json {
         eprintln!("{message}");
+        Ok(())
     } else {
-        println!("{message}");
+        writeln!(output, "{message}")
     }
 }
 
@@ -468,9 +505,17 @@ struct JsonPlan<'a> {
     schema_version: u32,
     root: &'a str,
     direct_match_count: usize,
+    selection: JsonSelection<'a>,
     keep_items: Vec<JsonItem<'a>>,
     delete_items: Vec<JsonItem<'a>>,
     delete_roots: Vec<JsonItem<'a>>,
+}
+
+#[derive(Serialize)]
+struct JsonSelection<'a> {
+    patterns: &'a [String],
+    modified_since: Option<&'a str>,
+    modified_before: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -481,12 +526,21 @@ struct JsonItem<'a> {
 }
 
 /// Serializes the complete plan, failing if any path cannot be represented as Unicode.
-fn json_plan_text(plan: &RemovalPlan) -> Result<String> {
+fn json_plan_text(
+    plan: &RemovalPlan,
+    patterns: &[String],
+    selection: &datetime::Selection,
+) -> Result<String> {
     let root = unicode_path(plan.root())?;
     let json_plan = JsonPlan {
         schema_version: JSON_SCHEMA_VERSION,
         root,
         direct_match_count: plan.direct_match_count(),
+        selection: JsonSelection {
+            patterns,
+            modified_since: selection.since.as_ref().map(|value| value.utc.as_str()),
+            modified_before: selection.before.as_ref().map(|value| value.utc.as_str()),
+        },
         keep_items: json_items(plan.keep_items())?,
         delete_items: json_items(plan.delete_items())?,
         delete_roots: json_items(plan.delete_roots())?,
@@ -617,11 +671,22 @@ fn confirmation_prompt(has_summaries: bool) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn write_confirmation_recap(
     output: &mut impl Write,
     plan: &RemovalPlan,
     has_summaries: bool,
     colors_enabled: bool,
+) -> io::Result<()> {
+    write_confirmation_recap_with_selection(output, plan, has_summaries, colors_enabled, None)
+}
+
+fn write_confirmation_recap_with_selection(
+    output: &mut impl Write,
+    plan: &RemovalPlan,
+    has_summaries: bool,
+    colors_enabled: bool,
+    selection: Option<&datetime::Selection>,
 ) -> io::Result<()> {
     let style = console::Style::new()
         .for_stderr()
@@ -638,6 +703,7 @@ fn write_confirmation_recap(
         bold.apply_to("Root:"),
         escape_control_characters(&display_root_path(plan.root()))
     )?;
+    write_modified_bounds(output, selection)?;
     writeln!(
         output,
         "  {} {} items (including required ancestors); {} direct matches",
@@ -721,7 +787,9 @@ fn confirm_on_terminal(prompt: &str) -> Result<Option<bool>> {
     Ok(Some(confirmed))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn print_plan(
+    output: &mut impl Write,
     plan: &remove_except::RemovalPlan,
     dry_run: bool,
     force: bool,
@@ -729,10 +797,11 @@ fn print_plan(
     delete_summary: bool,
     flat: bool,
     sort_by_type: bool,
+    selection: &datetime::Selection,
 ) -> io::Result<()> {
     let colors_enabled = io::stdout().is_terminal() && console::colors_enabled();
-    let mut output = BufWriter::new(io::stdout().lock());
-    render_plan(
+    let mut output = BufWriter::new(output);
+    render_plan_with_selection(
         &mut output,
         plan,
         dry_run,
@@ -742,11 +811,13 @@ fn print_plan(
         flat,
         sort_by_type,
         colors_enabled,
+        Some(selection),
     )?;
     output.flush()
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn render_plan(
     output: &mut impl Write,
     plan: &remove_except::RemovalPlan,
@@ -757,6 +828,58 @@ fn render_plan(
     flat: bool,
     sort_by_type: bool,
     colors_enabled: bool,
+) -> io::Result<[Range<usize>; 2]> {
+    render_plan_with_selection(
+        output,
+        plan,
+        dry_run,
+        force,
+        keep_summary,
+        delete_summary,
+        flat,
+        sort_by_type,
+        colors_enabled,
+        None,
+    )
+}
+
+fn write_modified_bounds(
+    output: &mut impl Write,
+    selection: Option<&datetime::Selection>,
+) -> io::Result<()> {
+    if let Some(selection) = selection.filter(|selection| selection.is_active()) {
+        writeln!(
+            output,
+            "Modified since (inclusive): {}",
+            selection
+                .since
+                .as_ref()
+                .map_or("unbounded", |value| value.human.as_str())
+        )?;
+        writeln!(
+            output,
+            "Modified before (exclusive): {}",
+            selection
+                .before
+                .as_ref()
+                .map_or("unbounded", |value| value.human.as_str())
+        )?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_plan_with_selection(
+    output: &mut impl Write,
+    plan: &remove_except::RemovalPlan,
+    dry_run: bool,
+    force: bool,
+    keep_summary: bool,
+    delete_summary: bool,
+    flat: bool,
+    sort_by_type: bool,
+    colors_enabled: bool,
+    selection: Option<&datetime::Selection>,
 ) -> io::Result<[Range<usize>; 2]> {
     let mut counted = LineWriter {
         inner: output,
@@ -795,6 +918,7 @@ fn render_plan(
         "Root: {}",
         escape_control_characters(&display_root_path(plan.root()))
     )?;
+    write_modified_bounds(output, selection)?;
     let show_legend = (!keep_summary && !plan.keep_items().is_empty())
         || (!delete_summary && !plan.delete_items().is_empty());
     if show_legend {
@@ -807,6 +931,7 @@ fn render_plan(
         direct_match_count: plan.direct_match_count(),
         delete_root_count: plan.delete_roots().len(),
         colors_enabled,
+        modified: selection.is_some_and(datetime::Selection::is_active),
     };
     let keep_line = output.lines;
     print_item_section(
@@ -908,9 +1033,10 @@ fn print_item_section(
                 } else {
                     "matches"
                 };
+                let pattern_label = if options.modified { "" } else { " pattern" };
                 writeln!(
                     output,
-                    "  {} kept {item_label} (including required ancestors); {} direct pattern {match_label}",
+                    "  {} kept {item_label} (including required ancestors); {} direct{pattern_label} {match_label}",
                     items.len(),
                     options.direct_match_count
                 )?;
@@ -1120,17 +1246,63 @@ fn remove_file_or_directory_link(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Args, InputError, flat_item_type_rank, read_confirmation, read_patterns, render_plan,
-        style_flat_item, tree_item_suffix,
+        Args, InputError, exit_code_for_error, flat_item_type_rank, read_confirmation,
+        read_patterns, render_plan, run_with_plan_builder, style_flat_item, tree_item_suffix,
     };
     use assert_fs::prelude::*;
-    use clap::CommandFactory;
-    use remove_except::{ItemType, build_plan};
+    use clap::{CommandFactory, Parser};
+    use remove_except::{ItemType, build_plan, build_plan_with_options};
 
     static COLOR_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[cfg(windows)]
     use super::display_root_path;
+
+    #[test]
+    fn plan_generation_failure_stops_before_output_or_deletion() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("keep.txt").write_str("keep").unwrap();
+        temp.child("remove.txt").write_str("remove").unwrap();
+
+        for format in ["human", "json"] {
+            for mode in [None, Some("--dry-run"), Some("--force")] {
+                let mut arguments = vec![
+                    std::ffi::OsString::from("remove-except"),
+                    "--root".into(),
+                    temp.path().as_os_str().to_owned(),
+                    "--pager".into(),
+                    "never".into(),
+                    "--format".into(),
+                    format.into(),
+                    "--modified-since".into(),
+                    "1601-01-01T00:00:00Z".into(),
+                    "keep.txt".into(),
+                ];
+                arguments.extend(mode.map(std::ffi::OsString::from));
+                let args = Args::try_parse_from(arguments).unwrap();
+                let mut output = Vec::new();
+                let error = run_with_plan_builder(
+                    args,
+                    |root, patterns, options| {
+                        let plan = build_plan_with_options(root, patterns, options)?;
+                        assert_eq!(plan.delete_roots().len(), 1);
+                        Err(anyhow::anyhow!("injected plan generation failure"))
+                    },
+                    &mut output,
+                )
+                .unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("injected plan generation failure")
+                );
+                assert_eq!(exit_code_for_error(&error), super::EXIT_RUNTIME_ERROR);
+                assert!(output.is_empty(), "{format} {mode:?}");
+                temp.child("keep.txt").assert("keep");
+                temp.child("remove.txt").assert("remove");
+            }
+        }
+    }
 
     #[test]
     // Verify only a newline-terminated `y` or `yes` line confirms.
@@ -1288,6 +1460,7 @@ mod tests {
             direct_match_count: 1,
             delete_root_count: 1,
             colors_enabled: true,
+            modified: false,
         };
         let mut output = Vec::new();
         super::print_item_section(

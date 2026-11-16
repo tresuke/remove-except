@@ -1,7 +1,169 @@
 use assert_fs::prelude::*;
-use remove_except::{ItemType, ValidationError, build_plan};
+use remove_except::{
+    ItemType, ModifiedRange, PlanOptions, ValidationError, build_plan, build_plan_with_options,
+};
+use std::time::{Duration, SystemTime};
 
 mod support;
+
+#[test]
+fn modified_ranges_validate_bounds_and_retain_system_time_precision() {
+    let start = SystemTime::UNIX_EPOCH + Duration::from_nanos(123_456_700);
+    let end = start + Duration::from_nanos(100);
+    for (since, before) in [
+        (None, None),
+        (Some(start), Some(start)),
+        (Some(end), Some(start)),
+    ] {
+        assert!(
+            ModifiedRange::new(since, before)
+                .unwrap_err()
+                .downcast_ref::<ValidationError>()
+                .is_some()
+        );
+    }
+    let range = ModifiedRange::new(Some(start), Some(end)).unwrap();
+    assert_eq!(range.since(), Some(start));
+    assert_eq!(range.before(), Some(end));
+    let temp = assert_fs::TempDir::new().unwrap();
+    let plan = build_plan_with_options(temp.path(), &[], &PlanOptions::new(range.clone())).unwrap();
+    assert_eq!(plan.modified_range(), Some(&range));
+}
+
+#[test]
+fn api_accepts_bound_at_cli_upper_limit() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let file = temp.child("file.txt");
+    file.write_str("data").unwrap();
+    let time = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    let handle = std::fs::OpenOptions::new()
+        .write(true)
+        .open(file.path())
+        .unwrap();
+    handle.set_modified(time).unwrap();
+    drop(handle);
+    assert_eq!(
+        std::fs::metadata(file.path()).unwrap().modified().unwrap(),
+        time
+    );
+    let bound = SystemTime::UNIX_EPOCH + Duration::from_secs(253_370_764_800);
+    let range = ModifiedRange::new(None, Some(bound)).unwrap();
+    let plan = build_plan_with_options(temp.path(), &[], &PlanOptions::new(range)).unwrap();
+    assert_eq!(plan.modified_range().unwrap().before(), Some(bound));
+    assert_eq!(plan.direct_match_count(), 1);
+}
+
+#[test]
+fn fractional_api_bounds_do_not_round_file_times() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let file = temp.child("file.txt");
+    file.write_str("data").unwrap();
+    let time = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    let handle = std::fs::OpenOptions::new()
+        .write(true)
+        .open(file.path())
+        .unwrap();
+    handle.set_modified(time).unwrap();
+    drop(handle);
+    assert_eq!(
+        std::fs::metadata(file.path()).unwrap().modified().unwrap(),
+        time
+    );
+    let after = time + Duration::from_nanos(100);
+    let keep = PlanOptions::new(ModifiedRange::new(None, Some(after)).unwrap());
+    let delete = PlanOptions::new(ModifiedRange::new(Some(after), None).unwrap());
+    assert_eq!(
+        build_plan_with_options(temp.path(), &[], &keep)
+            .unwrap()
+            .direct_match_count(),
+        1
+    );
+    assert_eq!(
+        build_plan_with_options(temp.path(), &[], &delete)
+            .unwrap()
+            .direct_match_count(),
+        0
+    );
+}
+
+#[test]
+fn modification_time_reflects_updates_through_hard_links() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("original").write_str("data").unwrap();
+    std::fs::hard_link(temp.path().join("original"), temp.path().join("alias")).unwrap();
+    let time = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    let handle = std::fs::OpenOptions::new()
+        .write(true)
+        .open(temp.path().join("alias"))
+        .unwrap();
+    handle.set_modified(time).unwrap();
+    drop(handle);
+    assert_eq!(
+        std::fs::metadata(temp.path().join("original"))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        time
+    );
+    let options = PlanOptions::new(ModifiedRange::new(Some(time), None).unwrap());
+    let plan = build_plan_with_options(temp.path(), &["original".to_owned()], &options).unwrap();
+    assert_eq!(plan.direct_match_count(), 1);
+    assert_eq!(plan.keep_items()[0].relative_path(), "original");
+}
+
+#[test]
+fn modified_range_combines_patterns_and_keeps_only_matching_files_and_ancestors() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let start = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    let end = start + Duration::from_secs(10);
+    for (name, time) in [
+        ("dir/at-start.txt", start),
+        ("dir/inside.txt", end - Duration::from_millis(1)),
+        ("dir/at-end.txt", end),
+        ("other.txt", start),
+    ] {
+        let file = temp.child(name);
+        file.write_str("data").unwrap();
+        let handle = std::fs::OpenOptions::new()
+            .write(true)
+            .open(file.path())
+            .unwrap();
+        handle.set_modified(time).unwrap();
+        drop(handle);
+        assert_eq!(
+            std::fs::metadata(file.path()).unwrap().modified().unwrap(),
+            time
+        );
+    }
+    temp.child("empty").create_dir_all().unwrap();
+    let range = ModifiedRange::new(Some(start), Some(end)).unwrap();
+    let options = PlanOptions::new(range);
+    let plan = build_plan_with_options(temp.path(), &["dir".to_owned()], &options).unwrap();
+    let kept: Vec<_> = plan
+        .keep_items()
+        .iter()
+        .map(|item| item.relative_path())
+        .collect();
+    assert_eq!(kept, ["dir", "dir/at-start.txt", "dir/inside.txt"]);
+    assert_eq!(plan.direct_match_count(), 2);
+    assert!(
+        plan.delete_items()
+            .iter()
+            .any(|item| item.relative_path() == "empty")
+    );
+    assert!(
+        plan.delete_items()
+            .iter()
+            .any(|item| item.relative_path() == "dir/at-end.txt")
+    );
+    let plan = build_plan_with_options(temp.path(), &[], &options).unwrap();
+    assert_eq!(plan.direct_match_count(), 3);
+    assert!(
+        plan.keep_items()
+            .iter()
+            .any(|item| item.relative_path() == "other.txt")
+    );
+}
 
 #[test]
 fn non_unicode_entries_are_runtime_errors_without_mutation() {

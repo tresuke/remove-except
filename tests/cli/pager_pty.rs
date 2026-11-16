@@ -339,6 +339,34 @@ fn fixture() -> assert_fs::TempDir {
 }
 
 #[test]
+fn pty_shows_modification_bounds_and_repeats_them_before_confirmation() {
+    let root = fixture();
+    let mut session = Session::start(
+        root.path(),
+        &[
+            "--pager",
+            "always",
+            "--modified-since",
+            "1601-01-01T00:00:00Z",
+        ],
+        false,
+    );
+    session.wait_for("c finish");
+    session.wait_for("Modified since (inclusive): 1601-01-01T00:00:00Z");
+    session.output.clear();
+    session.send(b"c");
+    session.wait_for("[y/N]");
+    assert!(
+        session
+            .output
+            .contains("Modified since (inclusive): 1601-01-01T00:00:00Z")
+    );
+    session.send(b"n\n");
+    session.exit(3);
+    root.child("remove-00.txt").assert("remove");
+}
+
+#[test]
 fn pty_navigation_input_discard_and_independent_confirmation() {
     let root = fixture();
     let mut session = Session::start(root.path(), &["--pager", "always"], false);

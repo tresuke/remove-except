@@ -3,7 +3,8 @@
 //! Safe removal plan generation for cleaning directories while keeping specified items.
 //!
 //! `remove-except` scans beneath a chosen processing root, compares discovered filesystem
-//! items against one or more keep patterns, and creates an in-memory [`RemovalPlan`].
+//! items against keep patterns and optional modification-time bounds, and creates an
+//! in-memory [`RemovalPlan`].
 //! The plan partitions items into kept entries (including required ancestor directories)
 //! and deletion targets.
 //!
@@ -24,8 +25,11 @@
 //!
 //! # Pattern Matching Syntax and Semantics
 //!
-//! At least one keep pattern must be provided. When multiple patterns are given, an item
-//! is kept if it matches **any** pattern (logical OR):
+//! [`build_plan`] requires at least one keep pattern. [`build_plan_with_options`] also
+//! accepts a modification-time range without patterns. Multiple patterns use OR, while
+//! the time range is combined with the pattern condition using AND. When a time range
+//! is present, only matching regular files and their ancestors are kept. The following
+//! pattern retention rules describe behavior without a time range:
 //!
 //! - `*` matches any sequence of non-separator characters within a single directory component.
 //! - `?` matches one Unicode scalar value other than a separator. A character class also
@@ -86,13 +90,14 @@ use anyhow::{Context, Result};
 use walkdir::WalkDir;
 
 mod error;
+mod metadata;
 mod model;
 mod path;
 mod pattern;
 
 pub use error::ValidationError;
 use error::{invalid, invalid_with_source};
-pub use model::{ItemType, PlannedItem, RemovalPlan};
+pub use model::{ItemType, ModifiedRange, PlanOptions, PlannedItem, RemovalPlan};
 use path::{display_path, ensure_unicode_path, is_drive_relative_path, is_filesystem_root};
 use pattern::compile_patterns;
 
@@ -164,8 +169,41 @@ use pattern::compile_patterns;
 /// assert!(plan.delete_roots().iter().any(|item| item.relative_path() == "temp.log"));
 /// ```
 pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
-    if patterns.is_empty() {
-        return Err(invalid("At least one pattern is required"));
+    build_plan_with_options(root, patterns, &PlanOptions::default())
+}
+
+/// Builds a read-only removal plan with optional modification-time filtering.
+///
+/// Patterns are combined with OR. When a modification range is present, only regular
+/// files satisfying both the pattern condition and range directly match; their ancestors
+/// are retained. An empty pattern list omits the pattern condition, but at least one
+/// pattern or a range is required. Without a range, behavior matches [`build_plan`].
+///
+/// This operation does not follow child symbolic links and does not provide a filesystem
+/// snapshot. A failure to obtain required file metadata aborts the entire plan.
+///
+/// # Errors
+///
+/// Invalid conditions, roots, and patterns carry [`ValidationError`]; traversal, metadata,
+/// and path-encoding failures are runtime errors. No partial plan is returned.
+pub fn build_plan_with_options(
+    root: &Path,
+    patterns: &[String],
+    options: &PlanOptions,
+) -> Result<RemovalPlan> {
+    build_plan_with_metadata(root, patterns, options, metadata::modified_time)
+}
+
+fn build_plan_with_metadata(
+    root: &Path,
+    patterns: &[String],
+    options: &PlanOptions,
+    mut modified_time: impl FnMut(&Path) -> Result<std::time::SystemTime>,
+) -> Result<RemovalPlan> {
+    if patterns.is_empty() && options.modified_range().is_none() {
+        return Err(invalid(
+            "At least one pattern or modification-time bound is required",
+        ));
     }
     if is_drive_relative_path(&root.to_string_lossy()) {
         return Err(invalid(format!(
@@ -194,7 +232,11 @@ pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
     }
 
     ensure_unicode_path(&root)?;
-    let compiled_patterns = compile_patterns(&root, patterns)?;
+    let compiled_patterns = if patterns.is_empty() {
+        None
+    } else {
+        Some(compile_patterns(&root, patterns)?)
+    };
     let mut entries = Vec::new();
     // WalkDir yields entries depth-first, so retain indices of the current item's ancestors.
     let mut directory_stack = Vec::new();
@@ -213,7 +255,18 @@ pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
             .strip_prefix(&root)
             .context("Walked path escaped the root directory")?;
         let relative_path = display_path(relative);
-        let matched = compiled_patterns.matches(&relative_path);
+        let pattern_matched = compiled_patterns
+            .as_ref()
+            .is_none_or(|patterns| patterns.matches(&relative_path));
+        let matched = if let Some(range) = options.modified_range() {
+            if pattern_matched && file_type.is_file() {
+                range.contains(modified_time(&path)?)
+            } else {
+                false
+            }
+        } else {
+            pattern_matched
+        };
 
         if matched {
             direct_match_count += 1;
@@ -242,13 +295,19 @@ pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
         }
     }
 
-    Ok(finalize_plan(root, direct_match_count, entries))
+    Ok(finalize_plan(
+        root,
+        direct_match_count,
+        options.modified_range().cloned(),
+        entries,
+    ))
 }
 
 /// Derives kept ancestors and top-level deletion items from recorded parent indices.
 fn finalize_plan(
     root: PathBuf,
     direct_match_count: usize,
+    modified_range: Option<ModifiedRange>,
     mut entries: Vec<IndexedItem>,
 ) -> RemovalPlan {
     // Children follow parents, so walk in reverse to propagate keep state to ancestors.
@@ -286,6 +345,7 @@ fn finalize_plan(
     RemovalPlan {
         root,
         direct_match_count,
+        modified_range,
         keep_items,
         delete_items,
         delete_roots,
@@ -313,6 +373,89 @@ mod tests {
     use super::{ItemType, build_plan, is_filesystem_root};
     use assert_fs::prelude::*;
     use std::path::Path;
+
+    #[test]
+    fn modification_time_is_requested_only_for_pattern_matching_regular_files() {
+        use super::{ModifiedRange, PlanOptions, build_plan_with_metadata};
+        use std::time::{Duration, SystemTime};
+
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("folder/selected.txt")
+            .write_str("selected")
+            .unwrap();
+        temp.child("folder/other.txt").write_str("other").unwrap();
+        let options =
+            PlanOptions::new(ModifiedRange::new(Some(SystemTime::UNIX_EPOCH), None).unwrap());
+        let mut observed = Vec::new();
+        let plan = build_plan_with_metadata(
+            temp.path(),
+            &["folder/selected.txt".to_owned()],
+            &options,
+            |path| {
+                observed.push(path.file_name().unwrap().to_owned());
+                Ok(SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+            },
+        )
+        .unwrap();
+        assert_eq!(observed, [std::ffi::OsString::from("selected.txt")]);
+        assert_eq!(plan.direct_match_count(), 1);
+        let mut observed = Vec::new();
+        let plan = build_plan_with_metadata(temp.path(), &[".".to_owned()], &options, |path| {
+            observed.push(path.file_name().unwrap().to_owned());
+            Ok(SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+        })
+        .unwrap();
+        observed.sort();
+        assert_eq!(
+            observed,
+            [
+                std::ffi::OsString::from("other.txt"),
+                std::ffi::OsString::from("selected.txt")
+            ]
+        );
+        assert_eq!(plan.direct_match_count(), 2);
+        let error = build_plan_with_metadata(
+            temp.path(),
+            &["folder/selected.txt".to_owned()],
+            &options,
+            |_| Err(anyhow::anyhow!("injected metadata failure")),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("injected metadata failure"));
+        assert!(error.downcast_ref::<super::ValidationError>().is_none());
+        temp.child("folder/selected.txt").assert("selected");
+        temp.child("folder/other.txt").assert("other");
+        build_plan_with_metadata(
+            temp.path(),
+            &[".".to_owned()],
+            &PlanOptions::default(),
+            |_| panic!("mtime must not be read without a time condition"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn modification_time_is_not_requested_for_a_matching_symlink() {
+        use super::{ModifiedRange, PlanOptions, build_plan_with_metadata};
+        use std::time::SystemTime;
+
+        let temp = assert_fs::TempDir::new().unwrap();
+        let target = temp.child("target.txt");
+        target.write_str("target").unwrap();
+        let link = temp.path().join("link");
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink(target.path(), &link);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_file(target.path(), &link);
+        link_result.expect("creating the symbolic-link fixture is required for this test");
+        let options =
+            PlanOptions::new(ModifiedRange::new(Some(SystemTime::UNIX_EPOCH), None).unwrap());
+        let plan = build_plan_with_metadata(temp.path(), &["link".to_owned()], &options, |_| {
+            panic!("mtime must not be read for a symlink")
+        })
+        .unwrap();
+        assert_eq!(plan.direct_match_count(), 0);
+    }
 
     #[test]
     // Verify filesystem roots are identified correctly on Unix and Windows.

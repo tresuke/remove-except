@@ -1,8 +1,8 @@
-//! Error classification for invalid roots and keep patterns.
+//! Error classification for invalid roots and keep conditions.
 
 use std::fmt;
 
-/// Marks an error caused by an invalid processing root or invalid keep patterns.
+/// Marks an error caused by an invalid processing root or invalid keep conditions.
 ///
 /// [`crate::build_plan`] returns [`anyhow::Error`] values. When the failure was caused by
 /// the caller's input rather than by filesystem traversal, the error carries a
@@ -15,7 +15,7 @@ use std::fmt;
 /// assert!(error.downcast_ref::<ValidationError>().is_some());
 /// ```
 ///
-/// Validation errors include missing or empty patterns, invalid glob syntax, patterns that
+/// Validation errors include missing conditions, empty patterns, invalid time ranges, invalid glob syntax, patterns that
 /// escape the processing root, Windows drive-relative paths, and roots that cannot be
 /// resolved, are not directories, or are filesystem roots. Errors while walking beneath a
 /// valid root are not validation errors. The message text is not a stable API contract.

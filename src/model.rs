@@ -1,9 +1,77 @@
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+use anyhow::Result;
+
+use crate::error::invalid;
+
+/// A half-open range of modification instants.
+///
+/// The lower bound is inclusive and the upper bound is exclusive. Bounds retain the
+/// precision and range of the supplied `SystemTime` values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModifiedRange {
+    since: Option<SystemTime>,
+    before: Option<SystemTime>,
+}
+
+impl ModifiedRange {
+    /// Constructs a range with at least one bound.
+    ///
+    /// Returns a [`crate::ValidationError`] if both bounds are absent or the lower
+    /// bound is greater than or equal to the upper bound.
+    pub fn new(since: Option<SystemTime>, before: Option<SystemTime>) -> Result<Self> {
+        if since.is_none() && before.is_none() {
+            return Err(invalid("At least one modification-time bound is required"));
+        }
+        if let (Some(since), Some(before)) = (since, before)
+            && since >= before
+        {
+            return Err(invalid("Modification-time start must precede the end"));
+        }
+        Ok(Self { since, before })
+    }
+
+    /// Returns the inclusive lower bound, if specified.
+    pub fn since(&self) -> Option<SystemTime> {
+        self.since
+    }
+
+    /// Returns the exclusive upper bound, if specified.
+    pub fn before(&self) -> Option<SystemTime> {
+        self.before
+    }
+
+    pub(crate) fn contains(&self, time: SystemTime) -> bool {
+        self.since.is_none_or(|since| time >= since)
+            && self.before.is_none_or(|before| time < before)
+    }
+}
+
+/// Optional conditions used while generating a removal plan.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlanOptions {
+    modified_range: Option<ModifiedRange>,
+}
+
+impl PlanOptions {
+    /// Constructs options with a modification-time range.
+    pub fn new(modified_range: ModifiedRange) -> Self {
+        Self {
+            modified_range: Some(modified_range),
+        }
+    }
+
+    /// Returns the modification-time range, if specified.
+    pub fn modified_range(&self) -> Option<&ModifiedRange> {
+        self.modified_range.as_ref()
+    }
+}
 
 /// The type of a filesystem item found during traversal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemType {
-    /// A regular file.
+    /// An item other than a directory or symbolic link, including special files.
     File,
     /// A directory.
     Directory,
@@ -47,7 +115,7 @@ impl PlannedItem {
 
 /// An in-memory plan containing items to keep or delete beneath a root directory.
 ///
-/// Created by [`crate::build_plan`]. Constructing or querying a `RemovalPlan` is strictly
+/// Created by [`crate::build_plan`] or [`crate::build_plan_with_options`]. Constructing or querying a `RemovalPlan` is strictly
 /// read-only and never modifies the filesystem.
 ///
 /// # Item Collections
@@ -55,7 +123,7 @@ impl PlannedItem {
 /// A `RemovalPlan` separates discovered filesystem items into three collections:
 ///
 /// - [`keep_items`](RemovalPlan::keep_items): Contains all items directly matched by keep
-///   patterns, plus all ancestor directories required to preserve their paths from the root.
+///   conditions, plus all ancestor directories required to preserve their paths from the root.
 /// - [`delete_items`](RemovalPlan::delete_items): Contains every individual item targeted for
 ///   deletion. This comprehensive list is suitable for full previews, logging, or reporting.
 /// - [`delete_roots`](RemovalPlan::delete_roots): Contains only the top-level deletion targets.
@@ -66,8 +134,9 @@ impl PlannedItem {
 pub struct RemovalPlan {
     /// The normalized traversal root. The root itself is not included in the plan.
     pub(crate) root: PathBuf,
-    /// Number of items directly matched by keep patterns; ancestors alone are not counted.
+    /// Number of items directly matching all keep conditions; ancestors alone are not counted.
     pub(crate) direct_match_count: usize,
+    pub(crate) modified_range: Option<ModifiedRange>,
     /// Items to keep and their ancestors, sorted by relative path.
     pub(crate) keep_items: Vec<PlannedItem>,
     /// All deletion targets, sorted by relative path.
@@ -84,12 +153,17 @@ impl RemovalPlan {
         &self.root
     }
 
-    /// Returns the number of items that directly matched one or more keep patterns.
+    /// Returns the number of items that directly matched all keep conditions.
     ///
     /// Directories kept solely because they are ancestors of matched items are not
     /// included in this count.
     pub fn direct_match_count(&self) -> usize {
         self.direct_match_count
+    }
+
+    /// Returns the modification-time range used to create the plan, if specified.
+    pub fn modified_range(&self) -> Option<&ModifiedRange> {
+        self.modified_range.as_ref()
     }
 
     /// Returns all kept items and their required ancestor directories, sorted by relative path.
