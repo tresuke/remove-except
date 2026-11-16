@@ -16,30 +16,30 @@ With modification-time filtering, even explicitly named links and empty director
 
 ### Prebuilt Binaries
 
-The `v0.4.0` [GitHub Release](https://github.com/tresuke/remove-except/releases/tag/v0.4.0) provides prebuilt binaries for Windows x64 and Linux x64. The older `v0.2.4` release provides source code only. The `v0.5.1` GitHub Release will provide binaries for Windows x64 and Linux x64 once published. The `v0.5.1` archives are not available before publication.
+The `v0.5.1` [GitHub Release](https://github.com/tresuke/remove-except/releases/tag/v0.5.1) provides prebuilt binaries for Windows x64 and Linux x64. The older `v0.2.4` release provides source code only.
 
-Version `v0.5.1` supports the modification-time options and JSON schema 2. They are not included in the published `v0.4.0`.
+Version `v0.5.1` supports the modification-time options and JSON schema 2. They are not included in `v0.4.0`.
 
-The currently available `v0.4.0` archives and checksums are listed below. Download them from that Release's **Assets**:
+Download the archives and checksums from the GitHub Release **Assets**:
 
 | Platform | Archive | SHA-256 file |
 | --- | --- | --- |
-| Windows x64 (MSVC) | `remove-except-v0.4.0-x86_64-pc-windows-msvc.zip` | `remove-except-v0.4.0-x86_64-pc-windows-msvc.zip.sha256` |
-| Linux x64 (GNU) | `remove-except-v0.4.0-x86_64-unknown-linux-gnu.tar.gz` | `remove-except-v0.4.0-x86_64-unknown-linux-gnu.tar.gz.sha256` |
+| Windows x64 (MSVC) | `remove-except-v0.5.1-x86_64-pc-windows-msvc.zip` | `remove-except-v0.5.1-x86_64-pc-windows-msvc.zip.sha256` |
+| Linux x64 (GNU) | `remove-except-v0.5.1-x86_64-unknown-linux-gnu.tar.gz` | `remove-except-v0.5.1-x86_64-unknown-linux-gnu.tar.gz.sha256` |
 
 The Linux binary is built in Ubuntu 22.04 and requires glibc 2.35 or later. Ubuntu is the supported Linux platform; the glibc requirement alone does not guarantee compatibility with other distributions. macOS, ARM64, and musl binaries are not included. Prebuilt binaries do not require a Rust toolchain.
 
 Before extracting or running the binary, verify the archive's SHA-256. On Windows, compare the hash from `Get-FileHash` with the first field in the checksum file (case-insensitive); do not continue if they differ:
 
 ```powershell
-Get-FileHash .\remove-except-v0.4.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256
-Get-Content .\remove-except-v0.4.0-x86_64-pc-windows-msvc.zip.sha256
+Get-FileHash .\remove-except-v0.5.1-x86_64-pc-windows-msvc.zip -Algorithm SHA256
+Get-Content .\remove-except-v0.5.1-x86_64-pc-windows-msvc.zip.sha256
 ```
 
 On Ubuntu, place the archive and checksum in the same directory and run:
 
 ```sh
-sha256sum --check remove-except-v0.4.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum --check remove-except-v0.5.1-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
 Also verify the archive's GitHub Actions build provenance with GitHub CLI, replacing `<archive-path>` with the downloaded archive's path:
@@ -53,24 +53,24 @@ The attestation is registered with GitHub, not supplied as a separate Release as
 After verification, extract the archive:
 
 ```powershell
-Expand-Archive -LiteralPath .\remove-except-v0.4.0-x86_64-pc-windows-msvc.zip -DestinationPath .\remove-except-v0.4.0
+Expand-Archive -LiteralPath .\remove-except-v0.5.1-x86_64-pc-windows-msvc.zip -DestinationPath .\remove-except-v0.5.1
 ```
 
 ```sh
-tar -xzf remove-except-v0.4.0-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf remove-except-v0.5.1-x86_64-unknown-linux-gnu.tar.gz
 ```
 
 Each archive contains a platform-named directory with `remove-except.exe` (Windows) or `remove-except` (Ubuntu), both READMEs, and both project licenses. Add the directory containing the executable to `PATH`, then check `remove-except --version`.
 
 ### Install from Source
 
-Install Rust 1.88 or later, then install from the currently published `v0.4.0` tag:
+Install Rust 1.88 or later, then install from the published `v0.5.1` tag:
 
 ```sh
-cargo install --git https://github.com/tresuke/remove-except --tag v0.4.0 --locked
+cargo install --git https://github.com/tresuke/remove-except --tag v0.5.1 --locked
 ```
 
-To install the development version, omit the tag and use the latest default-branch source. It may differ from the published `v0.4.0` release:
+To install the development version, omit the tag and use the latest default-branch source. It may differ from the published `v0.5.1` release:
 
 ```sh
 cargo install --git https://github.com/tresuke/remove-except --locked
@@ -80,10 +80,10 @@ You can also clone the repository and install from its top-level directory with 
 
 ### Install from crates.io
 
-[remove-except 0.4.0](https://crates.io/crates/remove-except/0.4.0) is published on crates.io. This `v0.5.1` release is not being published to crates.io. Install Rust 1.88 or later and run:
+See the [remove-except crates.io page](https://crates.io/crates/remove-except) for the latest published version and details. Install Rust 1.88 or later and run:
 
 ```sh
-cargo install remove-except --version '=0.4.0' --locked
+cargo install remove-except --locked
 ```
 
 ## Quick Start
