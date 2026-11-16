@@ -16,11 +16,11 @@
 
 ### ビルド済みバイナリー
 
-`v0.4.0` の [GitHub Release](https://github.com/tresuke/remove-except/releases/tag/v0.4.0) では、Windows x64／Linux x64 向けのビルド済みバイナリーを提供しています。以前の `v0.2.4` リリースはソースコードのみを提供します。
+`v0.4.0` の [GitHub Release](https://github.com/tresuke/remove-except/releases/tag/v0.4.0) では、Windows x64／Linux x64 向けのビルド済みバイナリーを提供しています。以前の `v0.2.4` リリースはソースコードのみを提供します。`v0.5.0` のGitHub Releaseでは、公開後にWindows x64／Linux x64向けバイナリーを提供します。公開前に `v0.5.0` のアーカイブを取得することはできません。
 
-以下の更新日時オプションとJSON schema 2は開発版の仕様であり、公開済みの `v0.4.0` には含まれません。
+`v0.5.0` では更新日時オプションとJSON schema 2を利用できます。これらは公開済みの `v0.4.0` には含まれません。
 
-上記 Release の **Assets** から、利用環境に合うアーカイブと対応するチェックサムを取得してください。
+現在ダウンロードできる `v0.4.0` のアーカイブとチェックサムは、同Releaseの **Assets** から取得してください。
 
 | 対象 | アーカイブ | SHA-256 ファイル |
 | --- | --- | --- |
@@ -64,7 +64,7 @@ tar -xzf remove-except-v0.4.0-x86_64-unknown-linux-gnu.tar.gz
 
 ### ソースからのインストール
 
-Rust 1.88 以降を用意し、公開済みの `v0.4.0` タグを指定してインストールします。
+Rust 1.88 以降を用意し、現在公開済みの `v0.4.0` タグを指定してインストールします。
 
 ```sh
 cargo install --git https://github.com/tresuke/remove-except --tag v0.4.0 --locked
@@ -80,7 +80,7 @@ cargo install --git https://github.com/tresuke/remove-except --locked
 
 ### crates.io からのインストール
 
-[remove-except 0.4.0](https://crates.io/crates/remove-except/0.4.0) は crates.io で公開済みです。Rust 1.88 以降を用意し、次のコマンドでインストールします。
+[remove-except 0.4.0](https://crates.io/crates/remove-except/0.4.0) は crates.io で公開済みです。今回 `v0.5.0` は crates.io では公開しません。Rust 1.88 以降を用意し、次のコマンドでインストールします。
 
 ```sh
 cargo install remove-except --version '=0.4.0' --locked
@@ -460,9 +460,11 @@ PowerShellでJSONを読み取る場合も、UTF-8として受け取る設定を�
 
 ## バージョンと互換性
 
-### 開発版の変更
+### v0.4.0 から v0.5.0 への更新
 
-- 更新日時による保持を追加します。指定時は明示したリンクや空ディレクトリーも削除対象になり得るため、`--dry-run` で全項目を確認してください。JSONはschema 2になり、schema 1の利用側は更新が必要です。既存の `build_plan` に加え、`build_plan_with_options` と `ModifiedRange` を提供します。
+- `--modified-since`（指定時刻を含む）と `--modified-before`（指定時刻を含まない）で更新日時を条件にできるようになりました。パターン条件と日時範囲はAND条件です。日時条件に直接一致するのは通常ファイルだけで、条件に一致するファイルがない場合や、明示したリンク・空ディレクトリーは削除対象になり得ます。実行前に `--summary` なしの `--dry-run` で全項目を確認してください。
+- JSONはschema 2になりました。schema 1を前提にする利用側は更新が必要です。ライブラリーには `build_plan_with_options` と `ModifiedRange` を追加しています。
+- 最低Rustバージョン1.88とWindows／Ubuntuの対応範囲は維持します。
 
 ### v0.3.0 から v0.4.0 への更新
 

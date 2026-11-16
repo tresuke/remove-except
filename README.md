@@ -16,11 +16,11 @@ With modification-time filtering, even explicitly named links and empty director
 
 ### Prebuilt Binaries
 
-The `v0.4.0` [GitHub Release](https://github.com/tresuke/remove-except/releases/tag/v0.4.0) provides prebuilt binaries for Windows x64 and Linux x64. The older `v0.2.4` release provides source code only.
+The `v0.4.0` [GitHub Release](https://github.com/tresuke/remove-except/releases/tag/v0.4.0) provides prebuilt binaries for Windows x64 and Linux x64. The older `v0.2.4` release provides source code only. The `v0.5.0` GitHub Release will provide binaries for Windows x64 and Linux x64 once published. The `v0.5.0` archives are not available before publication.
 
-The modification-time options and JSON schema 2 described below are development-version features and are not included in the published `v0.4.0`.
+Version `v0.5.0` supports the modification-time options and JSON schema 2. They are not included in the published `v0.4.0`.
 
-Download the archive for your platform and its matching checksum from that Release's **Assets**:
+The currently available `v0.4.0` archives and checksums are listed below. Download them from that Release's **Assets**:
 
 | Platform | Archive | SHA-256 file |
 | --- | --- | --- |
@@ -64,7 +64,7 @@ Each archive contains a platform-named directory with `remove-except.exe` (Windo
 
 ### Install from Source
 
-Install Rust 1.88 or later, then install from the published `v0.4.0` tag:
+Install Rust 1.88 or later, then install from the currently published `v0.4.0` tag:
 
 ```sh
 cargo install --git https://github.com/tresuke/remove-except --tag v0.4.0 --locked
@@ -80,7 +80,7 @@ You can also clone the repository and install from its top-level directory with 
 
 ### Install from crates.io
 
-[remove-except 0.4.0](https://crates.io/crates/remove-except/0.4.0) is published on crates.io. Install Rust 1.88 or later and run:
+[remove-except 0.4.0](https://crates.io/crates/remove-except/0.4.0) is published on crates.io. This `v0.5.0` release is not being published to crates.io. Install Rust 1.88 or later and run:
 
 ```sh
 cargo install remove-except --version '=0.4.0' --locked
@@ -458,9 +458,11 @@ If an error occurs during deletion (exit code 1), items already deleted are not 
 
 ## Versioning and Compatibility
 
-### Development Version
+### Upgrading from v0.4.0 to v0.5.0
 
-- Modification-time filtering may make explicitly selected links and empty directories deletion targets. Review all items with `--dry-run`. JSON now uses schema 2; schema 1 consumers must update. The library adds `build_plan_with_options` and `ModifiedRange` alongside the existing `build_plan`.
+- `--modified-since` (inclusive) and `--modified-before` (exclusive) add modification-time conditions. Pattern conditions and the time range are combined with AND semantics. Only regular files directly match a time condition; if no file matches, or when links and empty directories are explicitly named, those items may become deletion targets. Before running the command, review every item with `--dry-run` and without `--summary`.
+- JSON now uses schema 2. Consumers that expect schema 1 must update. The library adds `build_plan_with_options` and `ModifiedRange`.
+- The MSRV remains Rust 1.88, and Windows and Ubuntu remain supported.
 
 ### Upgrading from v0.3.0 to v0.4.0
 
