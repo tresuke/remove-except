@@ -2607,3 +2607,20 @@ fn help_documents_pipeline_options_and_exit_codes() {
     assert!(confirmation_line.starts_with("  Pending viewer input"));
     assert!(confirmation_line.contains("newline-terminated y/yes"));
 }
+
+#[test]
+fn help_documents_modification_time_formats() {
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8_lossy(&output);
+
+    assert!(output.contains("YYYY-MM-DDTHH:MM[:SS]"));
+    assert!(output.contains("YYYY-MM-DD HH:MM[:SS]"));
+    assert!(output.contains("Date-times may include Z or +/-HH:MM"));
+}
