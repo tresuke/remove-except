@@ -148,52 +148,79 @@ for item in plan.delete_roots() {
 
 The scan does not follow symbolic links. The CLI deletes `delete_roots` after plan creation. A deletion error does not restore items already removed.
 
-## Preparing a Release
+## Preparing and Publishing a Release
 
 During the 0.x series, bug fixes that restore documented behavior use patch releases. Backward-compatible feature additions, breaking CLI or public library API changes, and MSRV increases use minor releases. For a release containing multiple changes, use the highest applicable increment. Bump the version once the release contents are settled, updating the root package version in `Cargo.toml` and `Cargo.lock` together. Documentation-only changes do not normally require a version bump.
 
-The published `v0.2.4` source-only release is immutable. For a future version, update the package version in `Cargo.toml` and the root package entry in `Cargo.lock` in a PR, merge after required checks pass, and verify CI on the resulting `main`. After release contents are approved, create and push a new version tag:
+GitHub source/binary Releases and crates.io are separate distribution channels. Record the target version, included changes, intended channels, and approval for each publication in the release plan. Approval for one channel does not authorize publication to another.
 
-```sh
-git tag -a vX.Y.Z -m "remove-except vX.Y.Z"
-git push origin vX.Y.Z
-```
+### Ordered Release Procedure
 
-Run the manually dispatched **Prepare Release** workflow from that exact version tag, for example:
+Complete these steps in order. Record each gate's result, relevant commits/tags, workflow runs, Release/crate URLs, and any open items in the release preparation PR.
 
-```sh
-gh workflow run prepare-release.yml --ref vX.Y.Z
-```
+1. **Freeze the contents and distribution scope.** Review the changes since the last formal release and select a version under the 0.x rules. Decide separately whether to provide a GitHub Release (source and Windows x64/Linux x64 binaries) and a crates.io package. Assess whether any change affects keep/delete decisions, deletion results, safety, or compatibility.
+2. **Finalize documentation included in the distributions.** Treat `README.ja.md` as the source of truth and synchronize `README.md`; review release notes, tag-install commands, archive names, and crates.io instructions. **Prepare Release checks out the tag's two READMEs and copies them into the binary archives; Cargo includes the `README.md` from the source used to publish the crate. A post-publication edit on main does not update either an existing archive or a published crate.** Therefore merge documentation needed by a distribution before tagging or crate publication. Avoid time-sensitive claims that become false after publication; prefer version-neutral installation instructions that remain accurate both before and after a release.
+3. **Merge the version/release PR.** Update only the root package versions in `Cargo.toml` and `Cargo.lock`; include finalized user documentation and developer release notes as needed. Merge after required CI and reviews pass, then verify Rust CI and CodeQL on the resulting `main`. If publishing a crate, also verify the package inventory and dry run before creating a tag.
+4. **Tag the finalized `main` commit.** Confirm the version tag is unused, `main` is current and its CI passes, and the package version matches the intended tag. Create and push an annotated tag only after explicit approval. Never move or reuse a published tag.
 
-Verify that the tag points to a commit on `main` and matches the package version. The workflow validates Windows x64 and Linux x64 binaries, audits the lockfile and binaries with `cargo audit`, builds with a pinned `cargo-auditable` version, packages binaries with both READMEs and licenses, calculates SHA-256 checksums, attests archives, and creates or updates a draft GitHub Release. Embedded dependency metadata identifies crate names and versions; it is not a vulnerability scan or a defense against supply-chain attacks. The Linux binary is built in an Ubuntu 22.04 container and requires glibc 2.35 or later.
+   ```sh
+   git tag -a vX.Y.Z -m "remove-except vX.Y.Z"
+   git push origin vX.Y.Z
+   ```
 
-A tag push does not publish a release. Review the draft's source commit, generated notes, archives, checksums, and attestations before manually publishing it. Do not replace published contents under an existing version.
+5. **Build binaries from the tag and inspect the draft.** Manually dispatch **Prepare Release** from the exact version tag:
 
-### Post-publication README Synchronization Checklist
+   ```sh
+   gh workflow run prepare-release.yml --ref vX.Y.Z
+   ```
 
-After formal publication and verification of the public distributions provided for that release are complete, check the READMEs against actual distribution availability for every release. The following checklist is a reusable template. Check the applicable scope, such as binaries, source, or crates, and record execution results and links to any required documentation PRs in that release's preparation PR. Conditional guidance is acceptable before publication; do not describe unpublished assets as available.
+   Wait for every workflow job to finish successfully and for the draft to be created. Treat failures, skipped checks, and warnings explicitly; do not publish until blockers are resolved. The workflow verifies that the tag is on `main` and matches the package version; tests and audits Windows x64/Linux x64 binaries and the lockfile; builds with a pinned `cargo-auditable`; and creates archives containing the binaries, both READMEs, and licenses, with SHA-256 checksums and attestations. The Linux binary is built in an Ubuntu 22.04 container and requires glibc 2.35 or later. Embedded dependency metadata is not a vulnerability scan.
+6. **Manually review the GitHub draft before publication.** Do not select **Publish release** until all of these are confirmed:
+   ```sh
+   gh release view vX.Y.Z --repo tresuke/remove-except
+   gh release download vX.Y.Z --repo tresuke/remove-except
+   ```
 
-- [ ] For necessary corrections, treat `README.ja.md` as the source of truth and synchronize `README.md` in the same change.
-- [ ] Replace wording such as "available after publication" or "unavailable until publication" with the actual availability.
-- [ ] Verify direct links to the published Release, asset names, and tag-based installation instructions.
-- [ ] Distinguish the tag-based stable version from the development version installed from the default branch.
-- [ ] Confirm that distribution methods not yet provided are not described as available.
-- [ ] Merge any required documentation changes through the normal PR process and verify the post-merge state. If the READMEs already match the published state, no change or documentation PR is required; record only the verification result.
-- [ ] Mark post-release work complete only after the above checks and any required synchronization are complete.
+   - The draft tag, source commit, and package version match the plan; the tagged commit is an ancestor of `main`.
+   - Release notes accurately describe user-facing changes since the last formal release. Review generated notes rather than assuming they are correct.
+   - The Windows ZIP, Linux tar.gz, and both `.sha256` files are present. Download the assets and verify each checksum against its sidecar.
+   - Each archive contains the correct-version executable, both READMEs, and both licenses. Check `--version` on both binaries.
+   - Verify both archive attestations, for example: `gh attestation verify <archive-path> --repo tresuke/remove-except --signer-workflow tresuke/remove-except/.github/workflows/prepare-release.yml`.
+   - Record the results and publish decision; explicitly approve publishing the GitHub Release. Pushing a tag or completing the workflow does not publish the Release.
+7. **Publish to crates.io as a separate manual operation.** Do this only if crates.io is included in the release plan and its publication is explicitly approved. Confirm the packaged README will remain accurate after upload, the version is not already registered, and the package checks below pass. Use only maintainer-local Cargo credentials; never put tokens in the repository or Actions. A dry run and a real upload are separate operations. Verify the registry entry and an isolated install after upload. See “Crate Distribution Validation.”
+8. **Complete post-publication verification.** Verify the GitHub Release, four assets, checksums, and attestations; if crates.io is in scope, verify the registry version and installation result. Check that the README on `main` describes only distributions that are actually available, and synchronize it through the normal documentation PR process if needed. Record the final outcomes in the release preparation PR.
 
-Formal publication and completion of post-release work, including verification of post-publication guidance, are separate milestones. Do not move published tags or replace published distribution archives to synchronize documentation. Documentation-only changes do not normally require a version bump or a new release.
+### Post-publication Documentation and Distributions
+
+Post-publication checks verify and, if necessary, synchronize the user-facing README on `main`. They do not update READMEs embedded in already-published binaries or a crate. If an artifact's documentation is wrong, do not replace that artifact under the same version or move its tag. Record the impact and correct it in the next appropriate version. Documentation-only corrections do not normally require a version bump or new release.
+
+- [ ] `README.ja.md` and `README.md` agree on Release links, asset names, checksums, source tags, and crates.io installation instructions.
+- [ ] Only published distribution channels are described as available; unpublished assets are not presented as downloadable.
+- [ ] Make any necessary repository README synchronization through a normal PR and verify the merged `main`. If the docs already match, make no change and record the verification.
+- [ ] Record channel-specific validation, manual actions, approvals, and URLs in the release preparation PR before marking post-release work complete.
 
 ### Crate Distribution Validation
 
-Before preparing a crate distribution, inspect and validate the package:
+When crates.io is in scope, run these checks from the clean commit intended for publication and inspect the file inventory, including the README:
 
 ```sh
+cargo audit --file Cargo.lock
 cargo package --list --locked
 cargo package --locked
 cargo publish --dry-run --locked
 ```
 
-Keep the Cargo `include` allowlist limited to distributable source, user documentation, licenses, and required build targets; exclude local instructions, tests, fixtures, and developer-only utilities. A successful dry run does not publish the crate. crates.io publication is a separate manually approved action using maintainer-local credentials. Never store a crates.io token in the repository or release workflow.
+Keep the Cargo `include` allowlist limited to distributable source, user documentation, licenses, and required build targets; exclude local instructions, tests, fixtures, and developer-only utilities. A successful dry run does not prove that credentials can publish or that an upload succeeded. Confirm that the version is not registered and that `cargo owner --list remove-except` can access the crate. If authentication or permission fails, stop and have the maintainer repair credentials locally. Do not copy tokens into chat, source, logs, or CI.
+
+Create a token from crates.io **Account Settings → API Tokens**, limited to permission to publish a new version of the existing `remove-except` crate. Grant no more permission than needed; restrict it to the crate and use a short expiration when available. In the maintainer's PowerShell session, run `cargo login` and paste the token only into Cargo's prompt. Do not put the token in command arguments, environment variables, chat, or the repository. Check the configured Cargo credential provider and local storage. The default `cargo:token` provider stores the token in plain text in `$CARGO_HOME/credentials.toml` (usually `%USERPROFILE%\.cargo\credentials.toml`). Prefer an OS credential provider such as Windows Credential Manager when available. Success from `cargo owner --list remove-except` does not verify publish permission. If authentication or permission fails, stop and have the maintainer repair credentials before publishing. Never record the token value.
+
+After separate approval to publish, run this only in the maintainer's local environment:
+
+```sh
+cargo publish --locked
+```
+
+After upload, verify the crates.io version page/API and install the exact version to an isolated root with `cargo install remove-except --version '=X.Y.Z' --locked --root <temporary-directory>`. Run `--version` on the installed binary and remove the temporary installation after verification. A published version cannot be overwritten. Remember that the crate README, the README inside GitHub binary archives, and the README on `main` are distinct published artifacts.
 
 ## Performance Benchmarks
 
