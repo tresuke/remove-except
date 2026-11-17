@@ -118,7 +118,7 @@ cargo run --manifest-path ../Cargo.toml -- --dry-run keep.txt keep '*.md'
 
 ## 公開ライブラリー API
 
-[公開版 0.4.0 の API ドキュメント](https://docs.rs/remove-except/0.4.0/remove_except/)は docs.rs で閲覧できます。開発版の API は公開版 0.4.0 と異なる場合があります。ローカルで API ドキュメントを生成する方法は「実行と検証」を参照してください。crate の `build_plan(root, patterns)` 関数は、処理対象ディレクトリーと保持パターンから `RemovalPlan` を作成します。
+[公開されている最新バージョンの API ドキュメント](https://docs.rs/remove-except/latest/remove_except/)は docs.rs で閲覧できます。開発版の API は公開版と異なる場合があります。ローカルで API ドキュメントを生成する方法は「実行と検証」を参照してください。crate の `build_plan(root, patterns)` 関数は、処理対象ディレクトリーと保持パターンから `RemovalPlan` を作成します。
 
 パターンがない、または空である場合、glob が無効な場合、処理対象外の絶対パターンや親ディレクトリーへの移動がある場合、処理対象がファイルシステム最上位のディレクトリーまたはディレクトリー以外の場合、Windows の drive-relative path が指定された場合、処理対象を解決できない場合はエラーになります。入力検証エラーは `anyhow::Error::downcast_ref::<ValidationError>()` で識別できます。走査中のファイルシステムエラーは `ValidationError` ではありません。`.` と `./` は処理対象ディレクトリーを表し、その配下全体を保持します。
 
@@ -156,9 +156,9 @@ GitHub のソース／バイナリー Release と crates.io は別々の配布�
 
 ### 順序付きリリース手順
 
-以下を順に実施し、リリース準備 PR に各段階の結果、commit／tag、workflow run、Release／crate URL、必要な未完了事項を記録します。
+手順1〜4は共通です。GitHub Release を提供する場合に限り5〜6を、crates.io を提供する場合に限り7を実施します。両方を提供する場合は5〜7の順に進めます。手順8では、選択した配布先だけを検証します。各段階の結果、commit／tag、workflow run、Release／crate URL、必要な未完了事項をリリース準備 PR に記録します。
 
-1. **内容と配布先を確定する。** リリース差分を最後の正式公開版から確認し、0.x の規則で版数を決めます。GitHub Release（ソース、Windows x64／Linux x64 バイナリー）と crates.io のどれを提供するか個別に決定します。更新日時・削除結果・安全性・互換性に影響する変更がないか確認します。
+1. **内容と配布先を確定する。** リリース差分を最後の正式公開版から確認し、0.x の規則で版数を決めます。Prepare Release workflow を使う GitHub Release（GitHub のソースアーカイブと Windows x64／Linux x64 バイナリー）と crates.io を個別に選択します。更新日時・削除結果・安全性・互換性に影響する変更がないか確認します。
 2. **配布物に入る文書を先に完成させる。** `README.ja.md` を正本として `README.md` を同期し、リリースノート、タグ導入コマンド、アーカイブ名、crates.io 説明を確認します。**Prepare Release workflow はタグ上の両 README をバイナリーアーカイブへコピーし、Cargo は公開時の `README.md` を crate に含めます。main の公開後READMEを直しても既存アーカイブや公開済みcrate内の文書は更新されません。** そのため、配布物に必要な文書修正はタグ／crate公開より前にマージします。公開前後で意味が変わる文言を避け、版数非依存のインストール説明など、公開後も正確な表現を優先します。
 3. **版数変更 PR をマージする。** `Cargo.toml` と `Cargo.lock` のルートパッケージだけを更新し、日英READMEと必要な開発文書を同じリリース変更に含めます。必要な CI とレビューを通してマージし、その後の `main` の Rust CI と CodeQL が成功したことを確認します。crate を提供する場合は、タグを作る前に package inventory と dry-run も確認します。
 4. **main の確定 commit にタグを作成する。** version tag が未使用であること、`main` が更新済みでCI成功であること、タグ対象の `Cargo.toml` version と一致することを確認します。明示的な承認後に注釈付き tag を作成・push します。公開済み tag は移動・再利用しません。
@@ -168,18 +168,59 @@ GitHub のソース／バイナリー Release と crates.io は別々の配布�
    git push origin vX.Y.Z
    ```
 
-5. **タグからバイナリーを作り、draft を検査する。** 手動起動の **Prepare Release** workflow を正確なタグから実行します。
+5. **GitHub Release を提供する場合：タグからバイナリーを作る。** 手動起動の **Prepare Release** workflow を正確なタグから実行します。GitHub Release を提供しない場合は、この手順と手順6を飛ばします。
 
    ```sh
    gh workflow run prepare-release.yml --ref vX.Y.Z
    ```
 
    workflow の全 job が成功し、draft ができるまで待ちます。失敗・skip・警告を成功扱いせず、原因が解決するまで公開へ進みません。workflow はタグが `main` 上にあることと package version を照合し、Windows x64／Linux x64 のテスト、lockfile と各 binary の `cargo audit`、固定版 `cargo-auditable` によるビルド、checksum、attestation、両READMEとライセンスを含むアーカイブ作成を実施します。Linux binary は Ubuntu 22.04 でビルドし、glibc 2.35 以降が必要です。埋め込み依存情報は脆弱性スキャンではありません。
-6. **GitHub draft を手動で公開前検査する。** 次の項目がすべて一致するまで **Publish release** を実行しません。
+6. **GitHub Release を提供する場合：draft を手動で公開前検査する。** 次の項目がすべて一致するまで **Publish release** を実行しません。GitHub Release を提供しない場合は、この手順を飛ばします。
+
    ```sh
-   gh release view vX.Y.Z --repo tresuke/remove-except
-   gh release download vX.Y.Z --repo tresuke/remove-except
+   gh release view vX.Y.Z --repo tresuke/remove-except --json isDraft,tagName,targetCommitish,assets,body,url
    ```
+
+   アセットはリポジトリー外の一時ディレクトリーへダウンロードします。次の例では、`vX.Y.Z` を対象versionに置き換えてください。
+
+   ```powershell
+   $releaseDir = Join-Path $env:TEMP ("remove-except-vX.Y.Z-" + [guid]::NewGuid())
+   New-Item -ItemType Directory -Path $releaseDir
+   gh release download vX.Y.Z --repo tresuke/remove-except --dir $releaseDir
+   ```
+
+   ```sh
+   release_dir="$(mktemp -d)"
+   gh release download vX.Y.Z --repo tresuke/remove-except --dir "$release_dir"
+   ```
+
+   タグが計画したcommitを指し、最新の `main` の祖先であることも確認します。`git rev-parse` の出力を計画したcommitと照合してください。
+
+   ```sh
+   git fetch origin main --tags
+   git rev-parse "vX.Y.Z^{commit}"
+   git merge-base --is-ancestor "vX.Y.Z^{commit}" origin/main
+   ```
+
+   アーカイブのchecksumを照合し、ファイル一覧と実行ファイルのversionを確認します。Windows と Linux の検証はそれぞれの対象OSで行います。
+
+   ```powershell
+   Get-FileHash -LiteralPath (Join-Path $releaseDir 'remove-except-vX.Y.Z-x86_64-pc-windows-msvc.zip') -Algorithm SHA256
+   Get-Content -LiteralPath (Join-Path $releaseDir 'remove-except-vX.Y.Z-x86_64-pc-windows-msvc.zip.sha256')
+   Expand-Archive -LiteralPath (Join-Path $releaseDir 'remove-except-vX.Y.Z-x86_64-pc-windows-msvc.zip') -DestinationPath (Join-Path $releaseDir 'windows')
+   Get-ChildItem -LiteralPath (Join-Path $releaseDir 'windows') -Recurse
+   & (Join-Path $releaseDir 'windows\remove-except-vX.Y.Z-x86_64-pc-windows-msvc\remove-except.exe') --version
+   ```
+
+   ```sh
+   (cd "$release_dir" && sha256sum --check remove-except-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz.sha256)
+   tar -tzf "$release_dir/remove-except-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz"
+   mkdir "$release_dir/linux"
+   tar -xzf "$release_dir/remove-except-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz" -C "$release_dir/linux"
+   "$release_dir/linux/remove-except-vX.Y.Z-x86_64-unknown-linux-gnu/remove-except" --version
+   ```
+
+   Windows では計算した SHA-256 と checksum ファイルの値を大文字・小文字を区別せず照合します。一致しない場合は公開へ進みません。検査後に一時ディレクトリーを削除します。
 
    - draft のタグ、source commit、package version が計画と一致する。タグ commit が `main` の祖先である。
    - release notes が最後の正式公開版からの利用者向け差分を説明し、未公開版を公開済みと誤記していない。自動生成文面をそのまま信用しない。
@@ -188,7 +229,7 @@ GitHub のソース／バイナリー Release と crates.io は別々の配布�
    - 両アーカイブの来歴証明を検証する。例：`gh attestation verify <archive-path> --repo tresuke/remove-except --signer-workflow tresuke/remove-except/.github/workflows/prepare-release.yml`
    - 実行結果と公開判断を記録し、GitHub Release の正式公開を明示承認する。tag push やworkflow成功だけでは公開しない。
 7. **crates.io は独立した手動手順で公開する。** リリース計画で対象に含め、公開の明示承認がある場合のみ行います。package READMEが公開後も正確であること、同versionが未登録であること、次のpackage確認に成功することを確認します。maintainer のローカルCargo認証情報だけを使い、リポジトリーやActionsにtokenを保存しません。dry-runと実公開は別操作です。実公開後はregistry登録と隔離installを確認します。詳しくは「crate 配布の検証」を参照してください。
-8. **公開後の照合を完了する。** GitHub Release、4アセット、checksum、attestation と、対象に含めた場合はcrates.ioのversion／導入結果を確認します。`main` のREADMEが現在利用できる配布先を案内していることを確認し、必要なら通常の文書PRで同期します。最終結果をリリース準備PRに記録します。
+8. **公開後の照合を完了する。** GitHub Release を提供した場合は、その公開状態、4アセット、checksum、attestation を確認します。crates.io を提供した場合は、登録versionと導入結果を確認します。`main` のREADMEが現在利用できる配布先を案内していることを確認し、必要なら通常の文書PRで同期します。最終結果をリリース準備PRに記録します。
 
 ### 公開後の README と配布物
 
@@ -210,9 +251,9 @@ cargo package --locked
 cargo publish --dry-run --locked
 ```
 
-Cargo の `include` 許可リストには配布するソース、利用者向け文書、ライセンス、必要な build target のみを含め、ローカル指示、テスト、fixture、開発者専用ユーティリティは除外します。dry-run成功は認証や公開成功の証明ではありません。crate versionが未登録であることと、`cargo owner --list remove-except` でmaintainer accessを確認します。認証エラーや権限エラーは停止して、maintainer がローカル環境で認証を修復します。tokenを会話、ソース、ログ、CIへコピーしてはいけません。
+Cargo の `include` 許可リストには配布するソース、利用者向け文書、ライセンス、必要な build target のみを含め、ローカル指示、テスト、fixture、開発者専用ユーティリティは除外します。dry-run成功は認証や公開成功の証明ではありません。crate versionが未登録であることを確認します。`cargo owner --list remove-except` は maintainer access の確認に使えますが、公開権限の確認にはなりません。認証または権限エラーが出た場合は停止し、maintainer がローカル環境で認証を修復します。
 
-crates.io の **Account Settings → API Tokens** から、既存の `remove-except` crate の新version公開権限に限定したtokenを作ります。必要以上の権限を付けず、可能ならcrate名と短い有効期間を指定します。maintainer のPowerShellで `cargo login` を実行し、Cargoのpromptにtokenを貼り付けます。tokenをコマンド引数や環境変数、チャット、リポジトリーに入力してはいけません。Cargoのcredential providerとローカル保存先を確認します。`cargo:token` providerの既定保存先は `$CARGO_HOME/credentials.toml`（通常は `%USERPROFILE%\.cargo\credentials.toml`）で、tokenは平文です。利用可能ならWindows Credential ManagerなどのOS credential providerを使います。`cargo owner --list remove-except` の成功は公開権限の確認にはなりません。認証や権限エラーが出た場合は公開へ進まずmaintainerが認証を修復します。token値は記録しません。
+crates.io の **Account Settings → API Tokens** から、既存の `remove-except` crate の新version公開に必要な最小権限のtokenを作ります。可能ならcrateに限定し、短い有効期間を指定します。maintainer が管理するローカル環境で Cargo のcredential providerを確認してください。Cargo のpromptを使う場合は `cargo login` を実行し、tokenはpromptにだけ入力します。`cargo:token` providerは既定で `$CARGO_HOME/credentials.toml` にtokenを平文保存するため、利用可能な環境ではOSのcredential storeなど、より安全なproviderを使います。tokenをコマンド引数、環境変数、チャット、ソース、ログ、リポジトリー、Actionsへ保存・転記してはいけません。token値は記録しません。
 
 公開が個別に承認された後、maintainer のローカル環境でのみ実行します。
 

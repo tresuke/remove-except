@@ -118,7 +118,7 @@ The scripts create or overwrite known fixture files. They replace `keep-link` on
 
 ## Public Library API
 
-The [API documentation for published version 0.4.0](https://docs.rs/remove-except/0.4.0/remove_except/) is available on docs.rs. The development API may differ from published version 0.4.0. See “Run and Validate” for generating the API documentation locally. The crate's `build_plan(root, patterns)` function creates a `RemovalPlan` for a processing directory and keep patterns.
+The [API documentation for the latest published version](https://docs.rs/remove-except/latest/remove_except/) is available on docs.rs. The development API may differ from the published API. See “Run and Validate” for generating API documentation locally. The crate's `build_plan(root, patterns)` function creates a `RemovalPlan` for a processing directory and keep patterns.
 
 It returns an error for missing or empty patterns, invalid globs, absolute patterns outside the selected directory, parent traversal, filesystem roots, non-directory roots, Windows drive-relative paths, and roots that cannot be resolved. Input validation errors can be identified with `anyhow::Error::downcast_ref::<ValidationError>()`; filesystem errors during scanning are not `ValidationError`s. `.` and `./` represent the selected root and keep everything beneath it.
 
@@ -156,9 +156,9 @@ GitHub source/binary Releases and crates.io are separate distribution channels. 
 
 ### Ordered Release Procedure
 
-Complete these steps in order. Record each gate's result, relevant commits/tags, workflow runs, Release/crate URLs, and any open items in the release preparation PR.
+Steps 1–4 are common. Perform steps 5–6 only when a GitHub Release is in scope, and step 7 only when crates.io is in scope. If both are selected, perform steps 5–7 in order. In step 8, verify only the selected distribution channels. Record each gate's result, relevant commits/tags, workflow runs, Release/crate URLs, and any open items in the release preparation PR.
 
-1. **Freeze the contents and distribution scope.** Review the changes since the last formal release and select a version under the 0.x rules. Decide separately whether to provide a GitHub Release (source and Windows x64/Linux x64 binaries) and a crates.io package. Assess whether any change affects keep/delete decisions, deletion results, safety, or compatibility.
+1. **Freeze the contents and distribution scope.** Review the changes since the last formal release and select a version under the 0.x rules. Decide separately whether to provide a GitHub Release using the Prepare Release workflow (GitHub source archives and Windows x64/Linux x64 binaries) and a crates.io package. Assess whether any change affects keep/delete decisions, deletion results, safety, or compatibility.
 2. **Finalize documentation included in the distributions.** Treat `README.ja.md` as the source of truth and synchronize `README.md`; review release notes, tag-install commands, archive names, and crates.io instructions. **Prepare Release checks out the tag's two READMEs and copies them into the binary archives; Cargo includes the `README.md` from the source used to publish the crate. A post-publication edit on main does not update either an existing archive or a published crate.** Therefore merge documentation needed by a distribution before tagging or crate publication. Avoid time-sensitive claims that become false after publication; prefer version-neutral installation instructions that remain accurate both before and after a release.
 3. **Merge the version/release PR.** Update only the root package versions in `Cargo.toml` and `Cargo.lock`; include finalized user documentation and developer release notes as needed. Merge after required CI and reviews pass, then verify Rust CI and CodeQL on the resulting `main`. If publishing a crate, also verify the package inventory and dry run before creating a tag.
 4. **Tag the finalized `main` commit.** Confirm the version tag is unused, `main` is current and its CI passes, and the package version matches the intended tag. Create and push an annotated tag only after explicit approval. Never move or reuse a published tag.
@@ -168,18 +168,59 @@ Complete these steps in order. Record each gate's result, relevant commits/tags,
    git push origin vX.Y.Z
    ```
 
-5. **Build binaries from the tag and inspect the draft.** Manually dispatch **Prepare Release** from the exact version tag:
+5. **If a GitHub Release is in scope, build binaries from the tag.** Manually dispatch **Prepare Release** from the exact version tag. Skip this step and step 6 if no GitHub Release is planned:
 
    ```sh
    gh workflow run prepare-release.yml --ref vX.Y.Z
    ```
 
    Wait for every workflow job to finish successfully and for the draft to be created. Treat failures, skipped checks, and warnings explicitly; do not publish until blockers are resolved. The workflow verifies that the tag is on `main` and matches the package version; tests and audits Windows x64/Linux x64 binaries and the lockfile; builds with a pinned `cargo-auditable`; and creates archives containing the binaries, both READMEs, and licenses, with SHA-256 checksums and attestations. The Linux binary is built in an Ubuntu 22.04 container and requires glibc 2.35 or later. Embedded dependency metadata is not a vulnerability scan.
-6. **Manually review the GitHub draft before publication.** Do not select **Publish release** until all of these are confirmed:
+6. **If a GitHub Release is in scope, manually review the draft before publication.** Skip this step if no GitHub Release is planned. Do not select **Publish release** until all of these are confirmed:
+
    ```sh
-   gh release view vX.Y.Z --repo tresuke/remove-except
-   gh release download vX.Y.Z --repo tresuke/remove-except
+   gh release view vX.Y.Z --repo tresuke/remove-except --json isDraft,tagName,targetCommitish,assets,body,url
    ```
+
+   Download assets into a newly created temporary directory outside the repository. Replace `vX.Y.Z` with the target version.
+
+   ```powershell
+   $releaseDir = Join-Path $env:TEMP ("remove-except-vX.Y.Z-" + [guid]::NewGuid())
+   New-Item -ItemType Directory -Path $releaseDir
+   gh release download vX.Y.Z --repo tresuke/remove-except --dir $releaseDir
+   ```
+
+   ```sh
+   release_dir="$(mktemp -d)"
+   gh release download vX.Y.Z --repo tresuke/remove-except --dir "$release_dir"
+   ```
+
+   Also confirm that the tag points to the planned commit and is an ancestor of the current `main`. Compare the `git rev-parse` output with the planned commit:
+
+   ```sh
+   git fetch origin main --tags
+   git rev-parse "vX.Y.Z^{commit}"
+   git merge-base --is-ancestor "vX.Y.Z^{commit}" origin/main
+   ```
+
+   Verify each archive checksum, inspect its contents, and check the executable version. Perform each binary check on its target OS.
+
+   ```powershell
+   Get-FileHash -LiteralPath (Join-Path $releaseDir 'remove-except-vX.Y.Z-x86_64-pc-windows-msvc.zip') -Algorithm SHA256
+   Get-Content -LiteralPath (Join-Path $releaseDir 'remove-except-vX.Y.Z-x86_64-pc-windows-msvc.zip.sha256')
+   Expand-Archive -LiteralPath (Join-Path $releaseDir 'remove-except-vX.Y.Z-x86_64-pc-windows-msvc.zip') -DestinationPath (Join-Path $releaseDir 'windows')
+   Get-ChildItem -LiteralPath (Join-Path $releaseDir 'windows') -Recurse
+   & (Join-Path $releaseDir 'windows\remove-except-vX.Y.Z-x86_64-pc-windows-msvc\remove-except.exe') --version
+   ```
+
+   ```sh
+   (cd "$release_dir" && sha256sum --check remove-except-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz.sha256)
+   tar -tzf "$release_dir/remove-except-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz"
+   mkdir "$release_dir/linux"
+   tar -xzf "$release_dir/remove-except-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz" -C "$release_dir/linux"
+   "$release_dir/linux/remove-except-vX.Y.Z-x86_64-unknown-linux-gnu/remove-except" --version
+   ```
+
+   On Windows, compare the computed SHA-256 with the checksum-file value, ignoring letter case; do not proceed if they differ. Remove the temporary directory after verification.
 
    - The draft tag, source commit, and package version match the plan; the tagged commit is an ancestor of `main`.
    - Release notes accurately describe user-facing changes since the last formal release. Review generated notes rather than assuming they are correct.
@@ -188,7 +229,7 @@ Complete these steps in order. Record each gate's result, relevant commits/tags,
    - Verify both archive attestations, for example: `gh attestation verify <archive-path> --repo tresuke/remove-except --signer-workflow tresuke/remove-except/.github/workflows/prepare-release.yml`.
    - Record the results and publish decision; explicitly approve publishing the GitHub Release. Pushing a tag or completing the workflow does not publish the Release.
 7. **Publish to crates.io as a separate manual operation.** Do this only if crates.io is included in the release plan and its publication is explicitly approved. Confirm the packaged README will remain accurate after upload, the version is not already registered, and the package checks below pass. Use only maintainer-local Cargo credentials; never put tokens in the repository or Actions. A dry run and a real upload are separate operations. Verify the registry entry and an isolated install after upload. See “Crate Distribution Validation.”
-8. **Complete post-publication verification.** Verify the GitHub Release, four assets, checksums, and attestations; if crates.io is in scope, verify the registry version and installation result. Check that the README on `main` describes only distributions that are actually available, and synchronize it through the normal documentation PR process if needed. Record the final outcomes in the release preparation PR.
+8. **Complete post-publication verification.** If a GitHub Release is in scope, verify its publication status, four assets, checksums, and attestations. If crates.io is in scope, verify the registry version and installation result. Check that the README on `main` describes only distributions that are actually available, and synchronize it through the normal documentation PR process if needed. Record the final outcomes in the release preparation PR.
 
 ### Post-publication Documentation and Distributions
 
@@ -210,9 +251,9 @@ cargo package --locked
 cargo publish --dry-run --locked
 ```
 
-Keep the Cargo `include` allowlist limited to distributable source, user documentation, licenses, and required build targets; exclude local instructions, tests, fixtures, and developer-only utilities. A successful dry run does not prove that credentials can publish or that an upload succeeded. Confirm that the version is not registered and that `cargo owner --list remove-except` can access the crate. If authentication or permission fails, stop and have the maintainer repair credentials locally. Do not copy tokens into chat, source, logs, or CI.
+Keep the Cargo `include` allowlist limited to distributable source, user documentation, licenses, and required build targets; exclude local instructions, tests, fixtures, and developer-only utilities. A successful dry run does not prove that credentials can publish or that an upload succeeded. Confirm that the version is not registered. `cargo owner --list remove-except` can confirm maintainer access but does not confirm permission to publish. If authentication or permission fails, stop and have the maintainer repair credentials locally.
 
-Create a token from crates.io **Account Settings → API Tokens**, limited to permission to publish a new version of the existing `remove-except` crate. Grant no more permission than needed; restrict it to the crate and use a short expiration when available. In the maintainer's PowerShell session, run `cargo login` and paste the token only into Cargo's prompt. Do not put the token in command arguments, environment variables, chat, or the repository. Check the configured Cargo credential provider and local storage. The default `cargo:token` provider stores the token in plain text in `$CARGO_HOME/credentials.toml` (usually `%USERPROFILE%\.cargo\credentials.toml`). Prefer an OS credential provider such as Windows Credential Manager when available. Success from `cargo owner --list remove-except` does not verify publish permission. If authentication or permission fails, stop and have the maintainer repair credentials before publishing. Never record the token value.
+Create a token from crates.io **Account Settings → API Tokens** with only the permissions needed to publish a new version of the existing `remove-except` crate. Restrict it to the crate and set a short expiration when available. On a maintainer-controlled local environment, check the configured Cargo credential provider. To use Cargo's prompt, run `cargo login` and enter the token only there. The default `cargo:token` provider stores the token in plain text in `$CARGO_HOME/credentials.toml`; prefer a secure OS credential store when available. Never put tokens in command arguments, environment variables, chat, source, logs, the repository, or Actions, and never record the token value.
 
 After separate approval to publish, run this only in the maintainer's local environment:
 

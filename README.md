@@ -493,4 +493,4 @@ For development instructions, see the [Development Guide (Japanese, primary)](ht
 
 Some automated tests require symbolic-link creation and fail if it is unavailable. On Windows, this may require Developer Mode or administrator privileges.
 
-The [API documentation for published version 0.4.0](https://docs.rs/remove-except/0.4.0/remove_except/) is available on docs.rs. The development API may differ from published version 0.4.0.
+The [API documentation for the latest published version](https://docs.rs/remove-except/latest/remove_except/) is available on docs.rs. The development API may differ from the published API.

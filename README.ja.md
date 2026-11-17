@@ -495,4 +495,4 @@ PowerShellでJSONを読み取る場合も、UTF-8として受け取る設定を�
 
 一部の自動テストはシンボリックリンクの作成を必須とし、作成できない場合は失敗します。WindowsではDeveloper Modeまたは管理者権限が必要な場合があります。
 
-[公開版 0.4.0 の API ドキュメント](https://docs.rs/remove-except/0.4.0/remove_except/)は docs.rs で閲覧できます。開発版の API は公開版 0.4.0 と異なる場合があります。
+[公開されている最新バージョンの API ドキュメント](https://docs.rs/remove-except/latest/remove_except/)は docs.rs で閲覧できます。開発版の API は公開版と異なる場合があります。
