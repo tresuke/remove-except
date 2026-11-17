@@ -118,7 +118,7 @@ cargo run --manifest-path ../Cargo.toml -- --dry-run keep.txt keep '*.md'
 
 ## 公開ライブラリー API
 
-[公開版 0.4.0 の API ドキュメント](https://docs.rs/remove-except/0.4.0/remove_except/)は docs.rs で閲覧できます。開発版の API は公開版 0.4.0 と異なる場合があります。ローカルで API ドキュメントを生成する方法は「実行と検証」を参照してください。crate の `build_plan(root, patterns)` 関数は、処理対象ディレクトリーと保持パターンから `RemovalPlan` を作成します。
+[公開されている最新バージョンの API ドキュメント](https://docs.rs/remove-except/latest/remove_except/)は docs.rs で閲覧できます。開発版の API は公開版と異なる場合があります。ローカルで API ドキュメントを生成する方法は「実行と検証」を参照してください。crate の `build_plan(root, patterns)` 関数は、処理対象ディレクトリーと保持パターンから `RemovalPlan` を作成します。
 
 パターンがない、または空である場合、glob が無効な場合、処理対象外の絶対パターンや親ディレクトリーへの移動がある場合、処理対象がファイルシステム最上位のディレクトリーまたはディレクトリー以外の場合、Windows の drive-relative path が指定された場合、処理対象を解決できない場合はエラーになります。入力検証エラーは `anyhow::Error::downcast_ref::<ValidationError>()` で識別できます。走査中のファイルシステムエラーは `ValidationError` ではありません。`.` と `./` は処理対象ディレクトリーを表し、その配下全体を保持します。
 
@@ -148,52 +148,120 @@ for item in plan.delete_roots() {
 
 走査時にシンボリックリンクはたどりません。CLI は計画作成後に `delete_roots` を削除します。削除中にエラーが起きた場合、それ以前に削除された項目は復元されません。
 
-## リリースの準備
+## リリースの準備と公開
 
 0.x 系では、文書化された動作を戻す不具合修正は Patch、後方互換な機能追加・CLI または公開ライブラリー API の互換性を壊す変更・MSRV の引き上げは Minor とします。複数の変更を含む場合は最も大きい更新区分を使います。リリースに含める変更が確定してからバージョンを一度だけ更新し、`Cargo.toml` と `Cargo.lock` のルートパッケージを揃えます。文書のみの変更では通常バージョンを上げません。
 
-公開済みの `v0.2.4` はソースコードのみのリリースで、変更できません。今後のバージョンでは、`Cargo.toml` と `Cargo.lock` のルートパッケージのバージョンを PR で更新し、必須チェック通過後にマージし、更新後の `main` の CI を確認します。リリース内容の承認後、新しいバージョンタグを作成して push します。
+GitHub のソース／バイナリー Release と crates.io は別々の配布先です。リリース計画で対象バージョン、含める変更、提供する配布先、各公開の承認者を明記します。一つの配布先への承認を、別の配布先の公開承認とみなしてはいけません。
 
-```sh
-git tag -a vX.Y.Z -m "remove-except vX.Y.Z"
-git push origin vX.Y.Z
-```
+### 順序付きリリース手順
 
-手動起動の **Prepare Release** workflow はそのバージョンタグから実行します。たとえば GitHub CLI では次のとおりです。
+手順1〜4は共通です。GitHub Release を提供する場合に限り5〜6を、crates.io を提供する場合に限り7を実施します。両方を提供する場合は5〜7の順に進めます。手順8では、選択した配布先だけを検証します。各段階の結果、commit／tag、workflow run、Release／crate URL、必要な未完了事項をリリース準備 PR に記録します。
 
-```sh
-gh workflow run prepare-release.yml --ref vX.Y.Z
-```
+1. **内容と配布先を確定する。** リリース差分を最後の正式公開版から確認し、0.x の規則で版数を決めます。Prepare Release workflow を使う GitHub Release（GitHub のソースアーカイブと Windows x64／Linux x64 バイナリー）と crates.io を個別に選択します。更新日時・削除結果・安全性・互換性に影響する変更がないか確認します。
+2. **配布物に入る文書を先に完成させる。** `README.ja.md` を正本として `README.md` を同期し、リリースノート、タグ導入コマンド、アーカイブ名、crates.io 説明を確認します。**Prepare Release workflow はタグ上の両 README をバイナリーアーカイブへコピーし、Cargo は公開時の `README.md` を crate に含めます。main の公開後READMEを直しても既存アーカイブや公開済みcrate内の文書は更新されません。** そのため、配布物に必要な文書修正はタグ／crate公開より前にマージします。公開前後で意味が変わる文言を避け、版数非依存のインストール説明など、公開後も正確な表現を優先します。
+3. **版数変更 PR をマージする。** `Cargo.toml` と `Cargo.lock` のルートパッケージだけを更新し、日英READMEと必要な開発文書を同じリリース変更に含めます。必要な CI とレビューを通してマージし、その後の `main` の Rust CI と CodeQL が成功したことを確認します。crate を提供する場合は、タグを作る前に package inventory と dry-run も確認します。
+4. **main の確定 commit にタグを作成する。** version tag が未使用であること、`main` が更新済みでCI成功であること、タグ対象の `Cargo.toml` version と一致することを確認します。明示的な承認後に注釈付き tag を作成・push します。公開済み tag は移動・再利用しません。
 
-タグが `main` 上のコミットを指し、パッケージのバージョンと一致することを確認します。workflow は Windows x64 と Linux x64 のバイナリーを検証し、lockfile と各バイナリーを `cargo audit` で監査します。固定バージョンの `cargo-auditable` でビルドし、バイナリーと両 README、ライセンスをアーカイブにまとめ、SHA-256 checksum と来歴証明を作成して、GitHub Release のドラフトを作成または更新します。埋め込み依存情報は crate 名とバージョンを示すもので、脆弱性スキャンやサプライチェーン攻撃への防御ではありません。Linux バイナリーは Ubuntu 22.04 コンテナーでビルドされ、glibc 2.35 以降が必要です。
+   ```sh
+   git tag -a vX.Y.Z -m "remove-except vX.Y.Z"
+   git push origin vX.Y.Z
+   ```
 
-タグの push だけでは Release は公開されません。ドラフトの対象コミット、生成されたリリースノート、アーカイブ、checksum、来歴証明を確認してから手動で公開します。既に公開したバージョンの内容を置き換えてはいけません。
+5. **GitHub Release を提供する場合：タグからバイナリーを作る。** 手動起動の **Prepare Release** workflow を正確なタグから実行します。GitHub Release を提供しない場合は、この手順と手順6を飛ばします。
 
-### 公開後の README 同期チェックリスト
+   ```sh
+   gh workflow run prepare-release.yml --ref vX.Y.Z
+   ```
 
-正式公開と、そのリリースで提供する公開配布物の検証が完了した後、毎リリースで README と実際の配布状態を確認します。次のチェックリストは再利用する雛形です。バイナリー・ソース・crate など実際に提供する範囲に応じて確認し、実施結果と必要な文書 PR へのリンクは、そのリリース準備 PR に記録します。公開前は条件付きの案内で構いません。未公開アセットを利用可能と記述してはいけません。
+   workflow の全 job が成功し、draft ができるまで待ちます。失敗・skip・警告を成功扱いせず、原因が解決するまで公開へ進みません。workflow はタグが `main` 上にあることと package version を照合し、Windows x64／Linux x64 のテスト、lockfile と各 binary の `cargo audit`、固定版 `cargo-auditable` によるビルド、checksum、attestation、両READMEとライセンスを含むアーカイブ作成を実施します。Linux binary は Ubuntu 22.04 でビルドし、glibc 2.35 以降が必要です。埋め込み依存情報は脆弱性スキャンではありません。
+6. **GitHub Release を提供する場合：draft を手動で公開前検査する。** 次の項目がすべて一致するまで **Publish release** を実行しません。GitHub Release を提供しない場合は、この手順を飛ばします。
 
-- [ ] 必要な修正は `README.ja.md` を正本として、`README.md` も同じ変更内で同期する。
-- [ ] 「公開後に利用可能」「公開までは利用不可」などの表現を、実際の提供状態に更新する。
-- [ ] 公開済み Release への直接リンク、アセット名、タグ指定の導入手順を確認する。
-- [ ] タグ指定の安定版と、既定ブランチから導入する開発版を区別する。
-- [ ] 未提供の配布方法を、利用可能と案内していないことを確認する。
-- [ ] 必要な文書修正を通常の PR 手順で取り込み、マージ後の状態を確認する。既に公開状態と整合していれば、変更や文書 PR は不要で、確認結果のみ記録する。
-- [ ] 上記の確認と必要な同期が完了してから、リリース後作業を完了扱いにする。
+   ```sh
+   gh release view vX.Y.Z --repo tresuke/remove-except --json isDraft,tagName,targetCommitish,assets,body,url
+   ```
 
-正式公開の成立と、公開後の案内確認を含むリリース後作業の完了は別です。文書同期のために公開済みタグを移動したり、公開済み配布アーカイブを差し替えたりしてはいけません。文書のみの変更では通常、バージョン更新や再リリースは不要です。
+   アセットはリポジトリー外の一時ディレクトリーへダウンロードします。次の例では、`vX.Y.Z` を対象versionに置き換えてください。
+
+   ```powershell
+   $releaseDir = Join-Path $env:TEMP ("remove-except-vX.Y.Z-" + [guid]::NewGuid())
+   New-Item -ItemType Directory -Path $releaseDir
+   gh release download vX.Y.Z --repo tresuke/remove-except --dir $releaseDir
+   ```
+
+   ```sh
+   release_dir="$(mktemp -d)"
+   gh release download vX.Y.Z --repo tresuke/remove-except --dir "$release_dir"
+   ```
+
+   タグが計画したcommitを指し、最新の `main` の祖先であることも確認します。`git rev-parse` の出力を計画したcommitと照合してください。
+
+   ```sh
+   git fetch origin main --tags
+   git rev-parse "vX.Y.Z^{commit}"
+   git merge-base --is-ancestor "vX.Y.Z^{commit}" origin/main
+   ```
+
+   アーカイブのchecksumを照合し、ファイル一覧と実行ファイルのversionを確認します。Windows と Linux の検証はそれぞれの対象OSで行います。
+
+   ```powershell
+   Get-FileHash -LiteralPath (Join-Path $releaseDir 'remove-except-vX.Y.Z-x86_64-pc-windows-msvc.zip') -Algorithm SHA256
+   Get-Content -LiteralPath (Join-Path $releaseDir 'remove-except-vX.Y.Z-x86_64-pc-windows-msvc.zip.sha256')
+   Expand-Archive -LiteralPath (Join-Path $releaseDir 'remove-except-vX.Y.Z-x86_64-pc-windows-msvc.zip') -DestinationPath (Join-Path $releaseDir 'windows')
+   Get-ChildItem -LiteralPath (Join-Path $releaseDir 'windows') -Recurse
+   & (Join-Path $releaseDir 'windows\remove-except-vX.Y.Z-x86_64-pc-windows-msvc\remove-except.exe') --version
+   ```
+
+   ```sh
+   (cd "$release_dir" && sha256sum --check remove-except-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz.sha256)
+   tar -tzf "$release_dir/remove-except-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz"
+   mkdir "$release_dir/linux"
+   tar -xzf "$release_dir/remove-except-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz" -C "$release_dir/linux"
+   "$release_dir/linux/remove-except-vX.Y.Z-x86_64-unknown-linux-gnu/remove-except" --version
+   ```
+
+   Windows では計算した SHA-256 と checksum ファイルの値を大文字・小文字を区別せず照合します。一致しない場合は公開へ進みません。検査後に一時ディレクトリーを削除します。
+
+   - draft のタグ、source commit、package version が計画と一致する。タグ commit が `main` の祖先である。
+   - release notes が最後の正式公開版からの利用者向け差分を説明し、未公開版を公開済みと誤記していない。自動生成文面をそのまま信用しない。
+   - Windows ZIP／Linux tar.gz と各 `.sha256` の4アセットが存在し、ダウンロードしたファイルのSHA-256がchecksumと一致する。
+   - 両アーカイブに正しいversionの実行ファイル、両README、両licenseが含まれる。Windows／Linux binary の `--version` を確認する。
+   - 両アーカイブの来歴証明を検証する。例：`gh attestation verify <archive-path> --repo tresuke/remove-except --signer-workflow tresuke/remove-except/.github/workflows/prepare-release.yml`
+   - 実行結果と公開判断を記録し、GitHub Release の正式公開を明示承認する。tag push やworkflow成功だけでは公開しない。
+7. **crates.io は独立した手動手順で公開する。** リリース計画で対象に含め、公開の明示承認がある場合のみ行います。package READMEが公開後も正確であること、同versionが未登録であること、次のpackage確認に成功することを確認します。maintainer のローカルCargo認証情報だけを使い、リポジトリーやActionsにtokenを保存しません。dry-runと実公開は別操作です。実公開後はregistry登録と隔離installを確認します。詳しくは「crate 配布の検証」を参照してください。
+8. **公開後の照合を完了する。** GitHub Release を提供した場合は、その公開状態、4アセット、checksum、attestation を確認します。crates.io を提供した場合は、登録versionと導入結果を確認します。`main` のREADMEが現在利用できる配布先を案内していることを確認し、必要なら通常の文書PRで同期します。最終結果をリリース準備PRに記録します。
+
+### 公開後の README と配布物
+
+公開後チェックは、main の利用者向け案内の確認・同期です。公開済みバイナリー内のREADMEやcrateに同梱されたREADMEを変更する手順ではありません。これらの文書に誤りがあれば、公開物を同じversionのまま差し替えたりtagを移動したりせず、影響を記録し、次の適切なversionで修正します。文書のみの修正では通常、version更新や再リリースは不要です。
+
+- [ ] `README.ja.md` と `README.md` のReleaseリンク、asset名、checksum、source tag、crates.io導入案内が実際の公開状態と一致する。
+- [ ] 公開された配布先だけを利用可能として記載し、未公開のものは利用可能と誤認させない。
+- [ ] 必要なREADME同期は通常のPRで行い、merge後のmainを確認する。すでに一致している場合は変更せず、確認結果を記録する。
+- [ ] 配布先ごとの検証結果、手動操作、承認、関連URLをリリース準備PRに記録してから、リリース後作業を完了扱いにする。
 
 ### crate 配布の検証
 
-crate 配布の準備では、Cargo package の内容を確認し検証します。
+crateを提供する場合は、公開に使うクリーンなcommitで次を実行し、READMEを含む収録ファイルを確認します。
 
 ```sh
+cargo audit --file Cargo.lock
 cargo package --list --locked
 cargo package --locked
 cargo publish --dry-run --locked
 ```
 
-Cargo の `include` 許可リストには配布するソース、利用者向け文書、ライセンス、必要な build target のみを含め、ローカル指示、テスト、fixture、開発者専用ユーティリティは除外します。dry-run が成功しても crate は公開されません。crates.io への公開は maintainer のローカル認証情報を使う別途承認済みの手動操作です。crates.io token をリポジトリーや Release workflow に保存してはいけません。
+Cargo の `include` 許可リストには配布するソース、利用者向け文書、ライセンス、必要な build target のみを含め、ローカル指示、テスト、fixture、開発者専用ユーティリティは除外します。dry-run成功は認証や公開成功の証明ではありません。crate versionが未登録であることを確認します。`cargo owner --list remove-except` は maintainer access の確認に使えますが、公開権限の確認にはなりません。認証または権限エラーが出た場合は停止し、maintainer がローカル環境で認証を修復します。
+
+crates.io の **Account Settings → API Tokens** から、既存の `remove-except` crate の新version公開に必要な最小権限のtokenを作ります。可能ならcrateに限定し、短い有効期間を指定します。maintainer が管理するローカル環境で Cargo のcredential providerを確認してください。Cargo のpromptを使う場合は `cargo login` を実行し、tokenはpromptにだけ入力します。`cargo:token` providerは既定で `$CARGO_HOME/credentials.toml` にtokenを平文保存するため、利用可能な環境ではOSのcredential storeなど、より安全なproviderを使います。tokenをコマンド引数、環境変数、チャット、ソース、ログ、リポジトリー、Actionsへ保存・転記してはいけません。token値は記録しません。
+
+公開が個別に承認された後、maintainer のローカル環境でのみ実行します。
+
+```sh
+cargo publish --locked
+```
+
+公開後は crates.io のversion page/APIを確認し、隔離したrootへの `cargo install remove-except --version '=X.Y.Z' --locked --root <temporary-directory>` と導入binaryの `--version` で配布物を検証します。検証用ファイルは確認後に削除します。公開済みversionは上書きできません。crateのREADME、GitHub binary内README、mainのREADMEは別々の公開物であることを忘れないでください。
 
 ## 性能ベンチマーク
 
