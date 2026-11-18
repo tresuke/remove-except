@@ -3,7 +3,7 @@
 //! Safe removal plan generation for cleaning directories while keeping specified items.
 //!
 //! `remove-except` scans beneath a chosen processing root, compares discovered filesystem
-//! items against keep patterns and optional modification-time bounds, and creates an
+//! items against keep patterns and optional modification-time and file-size bounds, and creates an
 //! in-memory [`RemovalPlan`].
 //! The plan partitions items into kept entries (including required ancestor directories)
 //! and deletion targets.
@@ -26,10 +26,10 @@
 //! # Pattern Matching Syntax and Semantics
 //!
 //! [`build_plan`] requires at least one keep pattern. [`build_plan_with_options`] also
-//! accepts a modification-time range without patterns. Multiple patterns use OR, while
-//! the time range is combined with the pattern condition using AND. When a time range
-//! is present, only matching regular files and their ancestors are kept. The following
-//! pattern retention rules describe behavior without a time range:
+//! accepts modification-time and/or file-size ranges without patterns. Multiple patterns
+//! use OR, while each range is combined with the pattern condition and other ranges using AND.
+//! When either range is present, only matching regular files and their ancestors are kept.
+//! The following pattern retention rules describe behavior without a time or size range:
 //!
 //! - `*` matches any sequence of non-separator characters within a single directory component.
 //! - `?` matches one Unicode scalar value other than a separator. A character class also
@@ -97,7 +97,7 @@ mod pattern;
 
 pub use error::ValidationError;
 use error::{invalid, invalid_with_source};
-pub use model::{ItemType, ModifiedRange, PlanOptions, PlannedItem, RemovalPlan};
+pub use model::{ItemType, ModifiedRange, PlanOptions, PlannedItem, RemovalPlan, SizeRange};
 use path::{display_path, ensure_unicode_path, is_drive_relative_path, is_filesystem_root};
 use pattern::compile_patterns;
 
@@ -172,15 +172,17 @@ pub fn build_plan(root: &Path, patterns: &[String]) -> Result<RemovalPlan> {
     build_plan_with_options(root, patterns, &PlanOptions::default())
 }
 
-/// Builds a read-only removal plan with optional modification-time filtering.
+/// Builds a read-only removal plan with optional modification-time and file-size filtering.
 ///
-/// Patterns are combined with OR. When a modification range is present, only regular
-/// files satisfying both the pattern condition and range directly match; their ancestors
-/// are retained. An empty pattern list omits the pattern condition, but at least one
-/// pattern or a range is required. Without a range, behavior matches [`build_plan`].
+/// Patterns are combined with OR. Each specified time or size range is combined with the
+/// pattern condition and other ranges using AND. When any range is present, only regular
+/// files satisfying every keep condition directly match; their ancestors are retained.
+/// An empty pattern list omits the pattern condition, but at least one pattern or range
+/// is required. Without ranges, behavior matches [`build_plan`].
 ///
 /// This operation does not follow child symbolic links and does not provide a filesystem
-/// snapshot. A failure to obtain required file metadata aborts the entire plan.
+/// snapshot. Size bounds compare logical file lengths in bytes. A failure to obtain required
+/// metadata aborts the entire plan.
 ///
 /// # Errors
 ///
@@ -191,18 +193,19 @@ pub fn build_plan_with_options(
     patterns: &[String],
     options: &PlanOptions,
 ) -> Result<RemovalPlan> {
-    build_plan_with_metadata(root, patterns, options, metadata::modified_time)
+    build_plan_with_metadata(root, patterns, options, metadata::file_metadata)
 }
 
 fn build_plan_with_metadata(
     root: &Path,
     patterns: &[String],
     options: &PlanOptions,
-    mut modified_time: impl FnMut(&Path) -> Result<std::time::SystemTime>,
+    mut read_metadata: impl FnMut(&Path, bool) -> Result<metadata::FileMetadata>,
 ) -> Result<RemovalPlan> {
-    if patterns.is_empty() && options.modified_range().is_none() {
+    let has_filter = options.modified_range().is_some() || options.size_range().is_some();
+    if patterns.is_empty() && !has_filter {
         return Err(invalid(
-            "At least one pattern or modification-time bound is required",
+            "At least one pattern, modification-time bound, or file-size bound is required",
         ));
     }
     if is_drive_relative_path(&root.to_string_lossy()) {
@@ -258,9 +261,20 @@ fn build_plan_with_metadata(
         let pattern_matched = compiled_patterns
             .as_ref()
             .is_none_or(|patterns| patterns.matches(&relative_path));
-        let matched = if let Some(range) = options.modified_range() {
+        let matched = if has_filter {
             if pattern_matched && file_type.is_file() {
-                range.contains(modified_time(&path)?)
+                let metadata = read_metadata(&path, options.modified_range().is_some())?;
+                let modified_matches = if let Some(range) = options.modified_range() {
+                    range.contains(metadata.modified.context(
+                        "Required modification time was not returned by the metadata reader",
+                    )?)
+                } else {
+                    true
+                };
+                let size_matches = options
+                    .size_range()
+                    .is_none_or(|range| range.contains(metadata.size));
+                modified_matches && size_matches
             } else {
                 false
             }
@@ -299,6 +313,7 @@ fn build_plan_with_metadata(
         root,
         direct_match_count,
         options.modified_range().cloned(),
+        options.size_range().cloned(),
         entries,
     ))
 }
@@ -308,6 +323,7 @@ fn finalize_plan(
     root: PathBuf,
     direct_match_count: usize,
     modified_range: Option<ModifiedRange>,
+    size_range: Option<SizeRange>,
     mut entries: Vec<IndexedItem>,
 ) -> RemovalPlan {
     // Children follow parents, so walk in reverse to propagate keep state to ancestors.
@@ -346,6 +362,7 @@ fn finalize_plan(
         root,
         direct_match_count,
         modified_range,
+        size_range,
         keep_items,
         delete_items,
         delete_roots,
@@ -374,6 +391,13 @@ mod tests {
     use assert_fs::prelude::*;
     use std::path::Path;
 
+    fn file_metadata(
+        size: u64,
+        modified: Option<std::time::SystemTime>,
+    ) -> super::metadata::FileMetadata {
+        super::metadata::FileMetadata { size, modified }
+    }
+
     #[test]
     fn modification_time_is_requested_only_for_pattern_matching_regular_files() {
         use super::{ModifiedRange, PlanOptions, build_plan_with_metadata};
@@ -391,19 +415,32 @@ mod tests {
             temp.path(),
             &["folder/selected.txt".to_owned()],
             &options,
-            |path| {
+            |path, read_modified| {
+                assert!(read_modified);
                 observed.push(path.file_name().unwrap().to_owned());
-                Ok(SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+                Ok(file_metadata(
+                    8,
+                    Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1)),
+                ))
             },
         )
         .unwrap();
         assert_eq!(observed, [std::ffi::OsString::from("selected.txt")]);
         assert_eq!(plan.direct_match_count(), 1);
         let mut observed = Vec::new();
-        let plan = build_plan_with_metadata(temp.path(), &[".".to_owned()], &options, |path| {
-            observed.push(path.file_name().unwrap().to_owned());
-            Ok(SystemTime::UNIX_EPOCH + Duration::from_secs(1))
-        })
+        let plan = build_plan_with_metadata(
+            temp.path(),
+            &[".".to_owned()],
+            &options,
+            |path, read_modified| {
+                assert!(read_modified);
+                observed.push(path.file_name().unwrap().to_owned());
+                Ok(file_metadata(
+                    8,
+                    Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1)),
+                ))
+            },
+        )
         .unwrap();
         observed.sort();
         assert_eq!(
@@ -418,7 +455,7 @@ mod tests {
             temp.path(),
             &["folder/selected.txt".to_owned()],
             &options,
-            |_| Err(anyhow::anyhow!("injected metadata failure")),
+            |_, _| Err(anyhow::anyhow!("injected metadata failure")),
         )
         .unwrap_err();
         assert!(error.to_string().contains("injected metadata failure"));
@@ -429,9 +466,89 @@ mod tests {
             temp.path(),
             &[".".to_owned()],
             &PlanOptions::default(),
-            |_| panic!("mtime must not be read without a time condition"),
+            |_, _| panic!("metadata must not be read without a time or size condition"),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn size_only_reads_metadata_for_matching_regular_files_without_mtime() {
+        use super::{PlanOptions, SizeRange, build_plan_with_metadata};
+
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("selected.txt").write_str("selected").unwrap();
+        temp.child("other.txt").write_str("other").unwrap();
+        let options =
+            PlanOptions::default().with_size_range(SizeRange::new(Some(8), None).unwrap());
+        let mut observed = Vec::new();
+        let plan = build_plan_with_metadata(
+            temp.path(),
+            &["selected.txt".to_owned()],
+            &options,
+            |path, read_modified| {
+                assert!(!read_modified);
+                observed.push(path.file_name().unwrap().to_owned());
+                Ok(file_metadata(8, None))
+            },
+        )
+        .unwrap();
+        assert_eq!(observed, [std::ffi::OsString::from("selected.txt")]);
+        assert_eq!(plan.direct_match_count(), 1);
+        assert_eq!(plan.size_range(), options.size_range());
+    }
+
+    #[test]
+    fn size_filter_does_not_match_directories_or_follow_symlinks() {
+        use super::{PlanOptions, SizeRange, build_plan_with_metadata};
+
+        let temp = assert_fs::TempDir::new().unwrap();
+        let outside = assert_fs::TempDir::new().unwrap();
+        let target = outside.child("target.txt");
+        target.write_str("target").unwrap();
+        temp.child("empty").create_dir_all().unwrap();
+        let link = temp.path().join("link");
+        #[cfg(unix)]
+        let link_result = std::os::unix::fs::symlink(target.path(), &link);
+        #[cfg(windows)]
+        let link_result = std::os::windows::fs::symlink_file(target.path(), &link);
+        link_result.expect("creating the symbolic-link fixture is required for this test");
+
+        let options =
+            PlanOptions::default().with_size_range(SizeRange::new(Some(0), None).unwrap());
+        let plan = build_plan_with_metadata(temp.path(), &[".".to_owned()], &options, |_, _| {
+            panic!("metadata must not be read for directories or symlinks")
+        })
+        .unwrap();
+        assert_eq!(plan.direct_match_count(), 0);
+        assert_eq!(
+            plan.delete_items()
+                .iter()
+                .map(|item| (item.relative_path(), item.item_type()))
+                .collect::<Vec<_>>(),
+            [("empty", ItemType::Directory), ("link", ItemType::Symlink)]
+        );
+        target.assert("target");
+    }
+
+    #[test]
+    fn combined_ranges_read_metadata_once_per_matching_regular_file() {
+        use super::{ModifiedRange, PlanOptions, SizeRange, build_plan_with_metadata};
+        use std::time::SystemTime;
+
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("file.txt").write_str("data").unwrap();
+        let options =
+            PlanOptions::new(ModifiedRange::new(Some(SystemTime::UNIX_EPOCH), None).unwrap())
+                .with_size_range(SizeRange::new(Some(4), None).unwrap());
+        let mut calls = 0;
+        let plan = build_plan_with_metadata(temp.path(), &[], &options, |_, read_modified| {
+            calls += 1;
+            assert!(read_modified);
+            Ok(file_metadata(4, Some(SystemTime::UNIX_EPOCH)))
+        })
+        .unwrap();
+        assert_eq!(calls, 1);
+        assert_eq!(plan.direct_match_count(), 1);
     }
 
     #[test]
@@ -450,8 +567,8 @@ mod tests {
         link_result.expect("creating the symbolic-link fixture is required for this test");
         let options =
             PlanOptions::new(ModifiedRange::new(Some(SystemTime::UNIX_EPOCH), None).unwrap());
-        let plan = build_plan_with_metadata(temp.path(), &["link".to_owned()], &options, |_| {
-            panic!("mtime must not be read for a symlink")
+        let plan = build_plan_with_metadata(temp.path(), &["link".to_owned()], &options, |_, _| {
+            panic!("metadata must not be read for a symlink")
         })
         .unwrap();
         assert_eq!(plan.direct_match_count(), 0);

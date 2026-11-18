@@ -15,7 +15,8 @@ use clap::builder::styling::{AnsiColor, Styles};
 use clap::{CommandFactory, Parser, ValueEnum};
 use console::style;
 use remove_except::{
-    ItemType, PlanOptions, PlannedItem, RemovalPlan, ValidationError, build_plan_with_options,
+    ItemType, PlanOptions, PlannedItem, RemovalPlan, SizeRange, ValidationError,
+    build_plan_with_options,
 };
 use serde::Serialize;
 
@@ -34,8 +35,8 @@ const HELP_STYLES: Styles = Styles::styled()
 #[command(
     version,
     about = "Keep matching items and remove the rest under a processing root",
-    long_about = "Keep items matching paths or glob patterns and/or modification-time bounds and remove the rest under the selected root. Multiple patterns are combined with OR; the time range is combined with AND. Time filtering keeps only regular files and their ancestors. Always review the plan before deleting items. The normalized root and scanned entry paths must be representable as Unicode. Otherwise, nothing is printed to stdout or deleted (exit code 1), even with --force.",
-    after_long_help = "Output:\n  Tree: directories end with / and symlinks with @. With color, directories are blue, symlinks cyan, and kept parent directories in the delete tree green. Without color, kept parents end with +.\n  Flat: ItemType identifies each entry. Without color, directory and symlink paths end with / and @. Flat output has no kept-parent marker.\n  Status labels: NO REMOVALS (green) when there are no deletion operations; otherwise PREVIEW ONLY (cyan) for dry runs, CONFIRM TO DELETE (yellow) when confirmation is required, FORCE DELETE (red) with --force.\n  Colors are used automatically when output is a terminal and color is available.\n\nViewer:\n  --pager auto (default) pages long human output on supported terminals in normal and dry runs. JSON and --force bypass it. --pager always conflicts with JSON and --force; --pager never uses normal output.\n  Up/Down scroll, PageUp/PageDown page, Home/End move to the beginning/end, Tab/Shift+Tab switch sections. Long paths wrap without truncation. c finishes viewing; q/Esc/Ctrl+C cancel (code 3). Enter and y never approve deletion in the viewer.\n  Pending viewer input is discarded before a separate whole-line terminal confirmation. Only a newline-terminated y/yes confirms (case-insensitive, surrounding whitespace ignored); anything else or EOF cancels.\n  Auto explains unavailable-terminal fallback on stderr; always fails with code 1. Terminal errors after startup stop without deletion. Human final confirmation repeats root, counts, and applicable warnings on stderr.\n\nModification times:\n  --modified-since is inclusive and --modified-before is exclusive; either may be used alone. Accept YYYY-MM-DD, YYYY-MM-DDTHH:MM[:SS], or YYYY-MM-DD HH:MM[:SS]. Date-times may include Z or +/-HH:MM. Date-only and offset-free date-times use local time. Fractional seconds and ambiguous local times are rejected. Only matching regular files and their ancestors are kept; links and empty directories may be deleted.\n\nPipelines:\n  --patterns-from-stdin reads one UTF-8 pattern per line (LF or CRLF). A leading BOM is removed, empty lines are ignored, other whitespace is kept, and # has no special meaning. Invalid UTF-8 or NUL characters (for example, UTF-16 input) are rejected. Confirmation is then read from the terminal; without one, nothing is deleted.\n  --format json writes exactly one JSON object (schema_version 2) with root, direct_match_count, selection, keep_items, delete_items, and delete_roots to stdout. Messages and prompts go to stderr. New fields may be added without changing schema_version.\n\nExit codes:\n  0 plan shown or deletion completed; 1 runtime error (including viewer errors); 2 invalid arguments, input, root, or patterns; 3 nothing deleted because viewing was cancelled or confirmation was declined or unavailable.",
+    long_about = "Keep items matching any supplied path or glob pattern and all specified modification-time and file-size bounds, then remove the rest under the selected root. Multiple patterns are combined with OR; each time or size range is combined with the other conditions using AND. When a time or size filter is active, only matching regular files and their ancestors are kept. Always review the plan before deleting items. The normalized root and scanned entry paths must be representable as Unicode. Otherwise, nothing is printed to stdout or deleted (exit code 1), even with --force.",
+    after_long_help = "Output:\n  Tree: directories end with / and symlinks with @. With color, directories are blue, symlinks cyan, and kept parent directories in the delete tree green. Without color, kept parents end with +.\n  Flat: ItemType identifies each entry. Without color, directory and symlink paths end with / and @. Flat output has no kept-parent marker.\n  Status labels: NO REMOVALS (green) when there are no deletion operations; otherwise PREVIEW ONLY (cyan) for dry runs, CONFIRM TO DELETE (yellow) when confirmation is required, FORCE DELETE (red) with --force.\n  Colors are used automatically when output is a terminal and color is available.\n\nViewer:\n  --pager auto (default) pages long human output on supported terminals in normal and dry runs. JSON and --force bypass it. --pager always conflicts with JSON and --force; --pager never uses normal output.\n  Up/Down scroll, PageUp/PageDown page, Home/End move to the beginning/end, Tab/Shift+Tab switch sections. Long paths wrap without truncation. c finishes viewing; q/Esc/Ctrl+C cancel (code 3). Enter and y never approve deletion in the viewer.\n  Pending viewer input is discarded before a separate whole-line terminal confirmation. Only a newline-terminated y/yes confirms (case-insensitive, surrounding whitespace ignored); anything else or EOF cancels.\n  Auto explains unavailable-terminal fallback on stderr; always fails with code 1. Terminal errors after startup stop without deletion. Human final confirmation repeats root, counts, and applicable warnings on stderr.\n\nModification times:\n  --modified-since is inclusive and --modified-before is exclusive; either may be used alone. Accept YYYY-MM-DD, YYYY-MM-DDTHH:MM[:SS], or YYYY-MM-DD HH:MM[:SS]. Date-times may include Z or +/-HH:MM. Date-only and offset-free date-times use local time. Fractional seconds and ambiguous local times are rejected. Only matching regular files and their ancestors are kept; links and empty directories may be deleted.\n\nFile sizes:\n  --size-at-least is inclusive and --size-below is exclusive. Values are ASCII decimal byte counts in the u64 range; leading zeroes are allowed, but signs, whitespace, and unit suffixes are not. File sizes use logical lengths from metadata. --size-below 0 is invalid; --size-at-least 0 includes empty files. Only regular files can directly match a size filter.\n\nPipelines:\n  --patterns-from-stdin reads one UTF-8 pattern per line (LF or CRLF). A leading BOM is removed, empty lines are ignored, other whitespace is kept, and # has no special meaning. Invalid UTF-8 or NUL characters (for example, UTF-16 input) are rejected. Confirmation is then read from the terminal; without one, nothing is deleted.\n\nJSON:\n  --format json writes exactly one JSON object (schema_version 2) with root, direct_match_count, selection, keep_items, delete_items, and delete_roots to stdout. Messages and prompts go to stderr. New fields may be added without changing schema_version.\n\nExit codes:\n  0 plan shown or deletion completed; 1 runtime error (including viewer errors); 2 invalid arguments, input, root, patterns, modification times, or file sizes; 3 nothing deleted because viewing was cancelled or confirmation was declined or unavailable.",
     styles = HELP_STYLES
 )]
 struct Args {
@@ -78,6 +79,22 @@ struct Args {
 
     #[arg(
         long,
+        value_name = "BYTES",
+        value_parser = parse_size_bound,
+        help = "Keep regular files with a logical size at or above this byte count"
+    )]
+    size_at_least: Option<u64>,
+
+    #[arg(
+        long,
+        value_name = "BYTES",
+        value_parser = parse_size_bound,
+        help = "Keep regular files with a logical size below this byte count"
+    )]
+    size_below: Option<u64>,
+
+    #[arg(
+        long,
         value_enum,
         value_name = "FORMAT",
         default_value = "human",
@@ -117,7 +134,13 @@ struct Args {
     sort_by_type: bool,
 
     #[arg(
-        required_unless_present_any = ["patterns_from_stdin", "modified_since", "modified_before"],
+        required_unless_present_any = [
+            "patterns_from_stdin",
+            "modified_since",
+            "modified_before",
+            "size_at_least",
+            "size_below"
+        ],
         num_args = 0..,
         value_name = "KEEP_PATTERN",
         help = "Paths or glob patterns to keep (* matches one level, ? one Unicode scalar, ** recurses); any match keeps an item"
@@ -179,7 +202,7 @@ struct PlanDisplayOptions {
     direct_match_count: usize,
     delete_root_count: usize,
     colors_enabled: bool,
-    modified: bool,
+    filtered: bool,
 }
 
 /// Result of a run that did not fail.
@@ -202,6 +225,49 @@ impl fmt::Display for InputError {
 }
 
 impl std::error::Error for InputError {}
+
+fn parse_size_bound(value: &str) -> std::result::Result<u64, String> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("expected an unsigned decimal byte count".to_owned());
+    }
+    value
+        .parse()
+        .map_err(|_| "byte count is outside the supported u64 range".to_owned())
+}
+
+struct Selection {
+    modified: datetime::Selection,
+    size_range: Option<SizeRange>,
+    options: PlanOptions,
+}
+
+impl Selection {
+    fn is_active(&self) -> bool {
+        self.modified.is_active() || self.size_range.is_some()
+    }
+}
+
+fn resolve_selection(args: &Args) -> Result<Selection> {
+    let modified = datetime::resolve(
+        args.modified_since.as_deref(),
+        args.modified_before.as_deref(),
+    )?;
+    let size_range = if args.size_at_least.is_some() || args.size_below.is_some() {
+        Some(SizeRange::new(args.size_at_least, args.size_below)?)
+    } else {
+        None
+    };
+    let options = if let Some(size_range) = &size_range {
+        modified.options.clone().with_size_range(size_range.clone())
+    } else {
+        modified.options.clone()
+    };
+    Ok(Selection {
+        modified,
+        size_range,
+        options,
+    })
+}
 
 fn main() -> ExitCode {
     let args = Args::parse();
@@ -274,10 +340,7 @@ fn run_with_plan_builder(
     output: &mut impl Write,
 ) -> Result<Outcome> {
     let json = args.format == OutputFormat::Json;
-    let selection = datetime::resolve(
-        args.modified_since.as_deref(),
-        args.modified_before.as_deref(),
-    )?;
+    let selection = resolve_selection(&args)?;
     let mut patterns = args.patterns;
     if args.patterns_from_stdin {
         let stdin = io::stdin();
@@ -516,6 +579,8 @@ struct JsonSelection<'a> {
     patterns: &'a [String],
     modified_since: Option<&'a str>,
     modified_before: Option<&'a str>,
+    size_at_least: Option<u64>,
+    size_below: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -529,7 +594,7 @@ struct JsonItem<'a> {
 fn json_plan_text(
     plan: &RemovalPlan,
     patterns: &[String],
-    selection: &datetime::Selection,
+    selection: &Selection,
 ) -> Result<String> {
     let root = unicode_path(plan.root())?;
     let json_plan = JsonPlan {
@@ -538,8 +603,18 @@ fn json_plan_text(
         direct_match_count: plan.direct_match_count(),
         selection: JsonSelection {
             patterns,
-            modified_since: selection.since.as_ref().map(|value| value.utc.as_str()),
-            modified_before: selection.before.as_ref().map(|value| value.utc.as_str()),
+            modified_since: selection
+                .modified
+                .since
+                .as_ref()
+                .map(|value| value.utc.as_str()),
+            modified_before: selection
+                .modified
+                .before
+                .as_ref()
+                .map(|value| value.utc.as_str()),
+            size_at_least: selection.size_range.as_ref().and_then(SizeRange::at_least),
+            size_below: selection.size_range.as_ref().and_then(SizeRange::below),
         },
         keep_items: json_items(plan.keep_items())?,
         delete_items: json_items(plan.delete_items())?,
@@ -686,7 +761,7 @@ fn write_confirmation_recap_with_selection(
     plan: &RemovalPlan,
     has_summaries: bool,
     colors_enabled: bool,
-    selection: Option<&datetime::Selection>,
+    selection: Option<&Selection>,
 ) -> io::Result<()> {
     let style = console::Style::new()
         .for_stderr()
@@ -703,7 +778,7 @@ fn write_confirmation_recap_with_selection(
         bold.apply_to("Root:"),
         escape_control_characters(&display_root_path(plan.root()))
     )?;
-    write_modified_bounds(output, selection)?;
+    write_selection_bounds(output, selection)?;
     writeln!(
         output,
         "  {} {} items (including required ancestors); {} direct matches",
@@ -797,7 +872,7 @@ fn print_plan(
     delete_summary: bool,
     flat: bool,
     sort_by_type: bool,
-    selection: &datetime::Selection,
+    selection: &Selection,
 ) -> io::Result<()> {
     let colors_enabled = io::stdout().is_terminal() && console::colors_enabled();
     let mut output = BufWriter::new(output);
@@ -843,27 +918,47 @@ fn render_plan(
     )
 }
 
-fn write_modified_bounds(
+fn write_selection_bounds(
     output: &mut impl Write,
-    selection: Option<&datetime::Selection>,
+    selection: Option<&Selection>,
 ) -> io::Result<()> {
-    if let Some(selection) = selection.filter(|selection| selection.is_active()) {
-        writeln!(
-            output,
-            "Modified since (inclusive): {}",
-            selection
-                .since
-                .as_ref()
-                .map_or("unbounded", |value| value.human.as_str())
-        )?;
-        writeln!(
-            output,
-            "Modified before (exclusive): {}",
-            selection
-                .before
-                .as_ref()
-                .map_or("unbounded", |value| value.human.as_str())
-        )?;
+    if let Some(selection) = selection {
+        if selection.modified.is_active() {
+            writeln!(
+                output,
+                "Modified since (inclusive): {}",
+                selection
+                    .modified
+                    .since
+                    .as_ref()
+                    .map_or("unbounded", |value| value.human.as_str())
+            )?;
+            writeln!(
+                output,
+                "Modified before (exclusive): {}",
+                selection
+                    .modified
+                    .before
+                    .as_ref()
+                    .map_or("unbounded", |value| value.human.as_str())
+            )?;
+        }
+        if let Some(size_range) = &selection.size_range {
+            writeln!(
+                output,
+                "Size at least (inclusive): {} bytes",
+                size_range
+                    .at_least()
+                    .map_or_else(|| "unbounded".to_owned(), |value| value.to_string())
+            )?;
+            writeln!(
+                output,
+                "Size below (exclusive): {} bytes",
+                size_range
+                    .below()
+                    .map_or_else(|| "unbounded".to_owned(), |value| value.to_string())
+            )?;
+        }
     }
     Ok(())
 }
@@ -879,7 +974,7 @@ fn render_plan_with_selection(
     flat: bool,
     sort_by_type: bool,
     colors_enabled: bool,
-    selection: Option<&datetime::Selection>,
+    selection: Option<&Selection>,
 ) -> io::Result<[Range<usize>; 2]> {
     let mut counted = LineWriter {
         inner: output,
@@ -918,7 +1013,7 @@ fn render_plan_with_selection(
         "Root: {}",
         escape_control_characters(&display_root_path(plan.root()))
     )?;
-    write_modified_bounds(output, selection)?;
+    write_selection_bounds(output, selection)?;
     let show_legend = (!keep_summary && !plan.keep_items().is_empty())
         || (!delete_summary && !plan.delete_items().is_empty());
     if show_legend {
@@ -931,7 +1026,7 @@ fn render_plan_with_selection(
         direct_match_count: plan.direct_match_count(),
         delete_root_count: plan.delete_roots().len(),
         colors_enabled,
-        modified: selection.is_some_and(datetime::Selection::is_active),
+        filtered: selection.is_some_and(Selection::is_active),
     };
     let keep_line = output.lines;
     print_item_section(
@@ -1033,7 +1128,7 @@ fn print_item_section(
                 } else {
                     "matches"
                 };
-                let pattern_label = if options.modified { "" } else { " pattern" };
+                let pattern_label = if options.filtered { "" } else { " pattern" };
                 writeln!(
                     output,
                     "  {} kept {item_label} (including required ancestors); {} direct{pattern_label} {match_label}",
@@ -1460,7 +1555,7 @@ mod tests {
             direct_match_count: 1,
             delete_root_count: 1,
             colors_enabled: true,
-            modified: false,
+            filtered: false,
         };
         let mut output = Vec::new();
         super::print_item_section(

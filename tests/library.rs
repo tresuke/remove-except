@@ -1,6 +1,7 @@
 use assert_fs::prelude::*;
 use remove_except::{
-    ItemType, ModifiedRange, PlanOptions, ValidationError, build_plan, build_plan_with_options,
+    ItemType, ModifiedRange, PlanOptions, SizeRange, ValidationError, build_plan,
+    build_plan_with_options,
 };
 use std::time::{Duration, SystemTime};
 
@@ -28,6 +29,118 @@ fn modified_ranges_validate_bounds_and_retain_system_time_precision() {
     let temp = assert_fs::TempDir::new().unwrap();
     let plan = build_plan_with_options(temp.path(), &[], &PlanOptions::new(range.clone())).unwrap();
     assert_eq!(plan.modified_range(), Some(&range));
+}
+
+#[test]
+fn size_ranges_validate_bounds_and_keep_byte_precision() {
+    for (at_least, below) in [
+        (None, None),
+        (None, Some(0)),
+        (Some(4), Some(4)),
+        (Some(5), Some(4)),
+    ] {
+        assert!(
+            SizeRange::new(at_least, below)
+                .unwrap_err()
+                .downcast_ref::<ValidationError>()
+                .is_some()
+        );
+    }
+
+    let range = SizeRange::new(Some(3), Some(5)).unwrap();
+    assert_eq!(range.at_least(), Some(3));
+    assert_eq!(range.below(), Some(5));
+
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("empty").write_str("").unwrap();
+    temp.child("small").write_str("ab").unwrap();
+    temp.child("lower").write_str("abc").unwrap();
+    temp.child("inside").write_str("abcd").unwrap();
+    temp.child("upper").write_str("abcde").unwrap();
+    let options = PlanOptions::default().with_size_range(range.clone());
+    let plan = build_plan_with_options(temp.path(), &[], &options).unwrap();
+    let kept: Vec<_> = plan
+        .keep_items()
+        .iter()
+        .map(|item| item.relative_path())
+        .collect();
+    assert_eq!(kept, ["inside", "lower"]);
+    assert_eq!(plan.direct_match_count(), 2);
+    assert_eq!(plan.size_range(), Some(&range));
+}
+
+#[test]
+fn size_only_zero_lower_bound_keeps_empty_files() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("empty").write_str("").unwrap();
+    temp.child("nonempty").write_str("x").unwrap();
+    let options = PlanOptions::default().with_size_range(SizeRange::new(Some(0), None).unwrap());
+    let plan = build_plan_with_options(temp.path(), &[], &options).unwrap();
+    assert_eq!(plan.direct_match_count(), 2);
+    assert_eq!(
+        plan.keep_items()
+            .iter()
+            .map(|item| item.relative_path())
+            .collect::<Vec<_>>(),
+        ["empty", "nonempty"]
+    );
+}
+
+#[test]
+fn size_range_combines_patterns_and_time_and_keeps_only_file_ancestors() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let start = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    for (name, contents, modified) in [
+        ("dir/keep.txt", "keep", start),
+        ("dir/too-small.txt", "x", start),
+        ("dir/too-large.txt", "large", start),
+        (
+            "dir/outside-time.txt",
+            "stay",
+            start - Duration::from_secs(1),
+        ),
+        ("other.txt", "keep", start),
+    ] {
+        let file = temp.child(name);
+        file.write_str(contents).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(file.path())
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+    }
+    temp.child("dir/empty").create_dir_all().unwrap();
+    let options = PlanOptions::new(ModifiedRange::new(Some(start), None).unwrap())
+        .with_size_range(SizeRange::new(Some(2), Some(5)).unwrap());
+    let plan = build_plan_with_options(temp.path(), &["dir".to_owned()], &options).unwrap();
+    let kept: Vec<_> = plan
+        .keep_items()
+        .iter()
+        .map(|item| item.relative_path())
+        .collect();
+    assert_eq!(kept, ["dir", "dir/keep.txt"]);
+    assert_eq!(plan.direct_match_count(), 1);
+    assert!(
+        plan.delete_items()
+            .iter()
+            .any(|item| item.relative_path() == "dir/empty")
+    );
+    assert!(
+        plan.delete_items()
+            .iter()
+            .any(|item| item.relative_path() == "dir/too-small.txt")
+    );
+    assert!(
+        plan.delete_items()
+            .iter()
+            .any(|item| item.relative_path() == "dir/too-large.txt")
+    );
+    assert!(
+        plan.delete_items()
+            .iter()
+            .any(|item| item.relative_path() == "dir/outside-time.txt")
+    );
 }
 
 #[test]

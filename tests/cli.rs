@@ -44,7 +44,9 @@ fn modification_time_json_combines_patterns_and_preserves_input_order() {
         serde_json::json!({
             "patterns": ["dir", "other", "other"],
             "modified_since": "2023-11-14T22:13:20Z",
-            "modified_before": null
+            "modified_before": null,
+            "size_at_least": null,
+            "size_below": null
         })
     );
     assert_eq!(plan["direct_match_count"], 1);
@@ -80,10 +82,219 @@ fn modification_time_only_and_local_day_are_resolved_in_child_process() {
         serde_json::json!({
             "patterns": [],
             "modified_since": "2026-11-09T15:00:00Z",
-            "modified_before": "2026-11-10T15:00:00Z"
+            "modified_before": "2026-11-10T15:00:00Z",
+            "size_at_least": null,
+            "size_below": null
         })
     );
     temp.child("file.txt").assert("data");
+}
+
+#[test]
+fn size_only_json_reports_integer_bounds_and_keeps_matching_files() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("empty").write_str("").unwrap();
+    temp.child("small").write_str("x").unwrap();
+    temp.child("lower").write_str("ab").unwrap();
+    temp.child("inside").write_str("abcd").unwrap();
+    temp.child("upper").write_str("abcde").unwrap();
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--dry-run",
+            "--format",
+            "json",
+            "--size-at-least",
+            "0002",
+            "--size-below",
+            "5",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let plan = parse_json_stdout(&output);
+    assert_eq!(
+        plan["selection"],
+        serde_json::json!({
+            "patterns": [],
+            "modified_since": null,
+            "modified_before": null,
+            "size_at_least": 2,
+            "size_below": 5
+        })
+    );
+    assert_eq!(plan["schema_version"], 2);
+    assert_eq!(plan["direct_match_count"], 2);
+    assert_eq!(relative_paths(&plan, "keep_items"), ["inside", "lower"]);
+    assert_eq!(
+        relative_paths(&plan, "delete_items"),
+        ["empty", "small", "upper"]
+    );
+}
+
+#[test]
+fn size_and_modification_time_json_preserves_combined_selection() {
+    use std::time::{Duration, SystemTime};
+
+    let temp = assert_fs::TempDir::new().unwrap();
+    let start = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    for (name, contents, modified) in [
+        ("dir/match.txt", "keep", start),
+        ("dir/too-small.txt", "x", start),
+        ("dir/too-large.txt", "large", start),
+        ("dir/too-old.txt", "old!", start - Duration::from_secs(1)),
+    ] {
+        let file = temp.child(name);
+        file.write_str(contents).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(file.path())
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+    }
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--dry-run",
+            "--format",
+            "json",
+            "--modified-since",
+            "2023-11-14T22:13:20Z",
+            "--size-at-least",
+            "2",
+            "--size-below",
+            "5",
+            "dir",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let plan = parse_json_stdout(&output);
+    assert_eq!(
+        plan["selection"],
+        serde_json::json!({
+            "patterns": ["dir"],
+            "modified_since": "2023-11-14T22:13:20Z",
+            "modified_before": null,
+            "size_at_least": 2,
+            "size_below": 5
+        })
+    );
+    assert_eq!(plan["direct_match_count"], 1);
+    assert_eq!(
+        relative_paths(&plan, "keep_items"),
+        ["dir", "dir/match.txt"]
+    );
+    assert_eq!(
+        relative_paths(&plan, "delete_items"),
+        ["dir/too-large.txt", "dir/too-old.txt", "dir/too-small.txt"]
+    );
+}
+
+#[test]
+fn size_filter_with_no_matches_warns_and_preserves_everything_in_dry_run() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("small.txt").write_str("small").unwrap();
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--size-at-least", "100"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(!output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("No items matched the keep conditions")
+    );
+    temp.child("small.txt").assert("small");
+}
+
+#[test]
+fn invalid_size_values_and_ranges_never_output_or_delete() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("file.txt").write_str("data").unwrap();
+    for value in ["", "+1", "-1", " 1", "1 ", "1KiB", "18446744073709551616"] {
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["--dry-run", "--size-at-least", value])
+            .assert()
+            .code(2)
+            .get_output()
+            .clone();
+        assert!(output.stdout.is_empty(), "{value:?}");
+        temp.child("file.txt").assert("data");
+    }
+
+    for args in [
+        vec!["--dry-run", "--size-below", "0"],
+        vec!["--dry-run", "--size-at-least", "5", "--size-below", "5"],
+        vec!["--dry-run", "--size-at-least", "6", "--size-below", "5"],
+    ] {
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(args)
+            .assert()
+            .code(2)
+            .get_output()
+            .clone();
+        assert!(output.stdout.is_empty());
+        temp.child("file.txt").assert("data");
+    }
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--patterns-from-stdin", "--size-below", "0"])
+        .write_stdin("file.txt\n")
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    assert!(output.stdout.is_empty());
+    temp.child("file.txt").assert("data");
+}
+
+#[test]
+fn size_bounds_are_shown_in_preview_and_confirmation_recap() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("delete.txt").write_str("x").unwrap();
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--pager",
+            "never",
+            "--size-at-least",
+            "3",
+            "--size-below",
+            "5",
+        ])
+        .write_stdin("n\n")
+        .assert()
+        .code(3)
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    for text in [
+        "Size at least (inclusive): 3 bytes",
+        "Size below (exclusive): 5 bytes",
+    ] {
+        assert!(stdout.contains(text), "{text}");
+        assert!(stderr.contains(text), "{text}");
+    }
+    temp.child("keep.txt").assert("keep");
+    temp.child("delete.txt").assert("x");
 }
 
 #[test]
@@ -2597,8 +2808,11 @@ fn help_documents_pipeline_options_and_exit_codes() {
     let output = String::from_utf8_lossy(&output);
 
     assert!(output.contains("--patterns-from-stdin"));
+    assert!(output.contains("--size-at-least <BYTES>"));
+    assert!(output.contains("--size-below <BYTES>"));
     assert!(output.contains("--format <FORMAT>"));
     assert!(output.contains("schema_version 2"));
+    assert!(output.contains("ASCII decimal byte counts in the u64 range"));
     assert!(output.contains("Exit codes:"));
     let confirmation_line = output
         .lines()
