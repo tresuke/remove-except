@@ -135,6 +135,46 @@ fn size_only_json_reports_integer_bounds_and_keeps_matching_files() {
 }
 
 #[test]
+fn size_bounds_accept_u64_max_with_empty_stdin_patterns() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("file.txt").write_str("data").unwrap();
+    for (option, lower, upper, matches) in [
+        ("--size-at-least", Some(u64::MAX), None, 0),
+        ("--size-below", None, Some(u64::MAX), 1),
+    ] {
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "--dry-run",
+                "--format",
+                "json",
+                "--patterns-from-stdin",
+                option,
+                "18446744073709551615",
+            ])
+            .write_stdin("")
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let plan = parse_json_stdout(&output);
+        assert_eq!(
+            plan["selection"],
+            serde_json::json!({
+                "patterns": [],
+                "modified_since": null,
+                "modified_before": null,
+                "size_at_least": lower,
+                "size_below": upper
+            })
+        );
+        assert_eq!(plan["direct_match_count"], matches);
+        temp.child("file.txt").assert("data");
+    }
+}
+
+#[test]
 fn size_and_modification_time_json_preserves_combined_selection() {
     use std::time::{Duration, SystemTime};
 
@@ -268,33 +308,37 @@ fn size_bounds_are_shown_in_preview_and_confirmation_recap() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();
     temp.child("delete.txt").write_str("x").unwrap();
-    let output = Command::cargo_bin("remove-except")
-        .unwrap()
-        .current_dir(temp.path())
-        .args([
-            "--pager",
-            "never",
-            "--size-at-least",
-            "3",
-            "--size-below",
-            "5",
-        ])
-        .write_stdin("n\n")
-        .assert()
-        .code(3)
-        .get_output()
-        .clone();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    for text in [
-        "Size at least (inclusive): 3 bytes",
-        "Size below (exclusive): 5 bytes",
+    for (bounds, expected_lower, expected_upper) in [
+        (
+            vec!["--size-at-least", "3", "--size-below", "5"],
+            "3 bytes",
+            "5 bytes",
+        ),
+        (vec!["--size-at-least", "3"], "3 bytes", "unbounded"),
+        (vec!["--size-below", "3"], "unbounded", "3 bytes"),
     ] {
-        assert!(stdout.contains(text), "{text}");
-        assert!(stderr.contains(text), "{text}");
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["--pager", "never"])
+            .args(bounds)
+            .write_stdin("n\n")
+            .assert()
+            .code(3)
+            .get_output()
+            .clone();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        for text in [
+            format!("Size at least (inclusive): {expected_lower}"),
+            format!("Size below (exclusive): {expected_upper}"),
+        ] {
+            assert!(stdout.lines().any(|line| line == text), "{text}");
+            assert!(stderr.lines().any(|line| line == text), "{text}");
+        }
+        temp.child("keep.txt").assert("keep");
+        temp.child("delete.txt").assert("x");
     }
-    temp.child("keep.txt").assert("keep");
-    temp.child("delete.txt").assert("x");
 }
 
 #[test]

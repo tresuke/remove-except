@@ -368,7 +368,7 @@ With `--patterns-from-stdin`, standard input is read as one pattern per line.
 - Completely empty lines are ignored. A line containing only spaces is treated as a whitespace pattern.
 - There is no comment syntax such as `#`.
 - Each line is interpreted as a path or glob, just like a positional argument, not as a literal file name. When file names printed by another command are passed directly, names containing glob characters (`*`, `?`, `[`, `{`, `}`, and `\` on Ubuntu) may match other items or fail as invalid globs. A directory whose name contains glob characters does not keep its contents. See “Matching and Retention” for escaping and appending `/**`.
-- Positional patterns may be combined with stdin patterns; all patterns use OR semantics. The command fails if neither a pattern nor a time bound remains.
+- Positional patterns may be combined with stdin patterns; all patterns use OR semantics. The command fails if no pattern, modification-time bound, or file-size bound remains.
 - NUL-delimited input is not supported. File names containing newlines cannot be passed as patterns.
 - Without a pipe or redirection, you can type patterns in the terminal, one per line. The command writes a note to standard error that it is waiting for input and how to finish. Finish input with Ctrl+D on Ubuntu, or Ctrl+Z followed by Enter on Windows.
 

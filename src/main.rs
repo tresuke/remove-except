@@ -946,17 +946,17 @@ fn write_selection_bounds(
         if let Some(size_range) = &selection.size_range {
             writeln!(
                 output,
-                "Size at least (inclusive): {} bytes",
+                "Size at least (inclusive): {}",
                 size_range
                     .at_least()
-                    .map_or_else(|| "unbounded".to_owned(), |value| value.to_string())
+                    .map_or_else(|| "unbounded".to_owned(), |value| format!("{value} bytes"))
             )?;
             writeln!(
                 output,
-                "Size below (exclusive): {} bytes",
+                "Size below (exclusive): {}",
                 size_range
                     .below()
-                    .map_or_else(|| "unbounded".to_owned(), |value| value.to_string())
+                    .map_or_else(|| "unbounded".to_owned(), |value| format!("{value} bytes"))
             )?;
         }
     }
