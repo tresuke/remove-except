@@ -304,6 +304,55 @@ fn invalid_size_values_and_ranges_never_output_or_delete() {
 }
 
 #[test]
+fn invalid_size_range_exits_while_stdin_is_still_open() {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("file.txt").write_str("data").unwrap();
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_remove-except"))
+        .current_dir(temp.path())
+        .args(["--force", "--patterns-from-stdin", "--size-below", "0"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // Keep the pipe open until the child exits; wait_with_output would close it.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            result => {
+                if let Err(error) = child.kill() {
+                    // The child may have exited between polling and killing it.
+                    assert!(
+                        matches!(child.try_wait(), Ok(Some(_))),
+                        "failed to terminate child after {result:?}: {error}"
+                    );
+                }
+                child.wait().expect("failed to reap child");
+                panic!("CLI did not exit promptly with stdin still open: {result:?}");
+            }
+        }
+    }
+
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("File-size upper bound must be greater than zero")
+    );
+    temp.child("file.txt").assert("data");
+}
+
+#[test]
 fn size_bounds_are_shown_in_preview_and_confirmation_recap() {
     let temp = assert_fs::TempDir::new().unwrap();
     temp.child("keep.txt").write_str("keep").unwrap();

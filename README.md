@@ -174,7 +174,7 @@ remove-except --dry-run --size-at-least 1048576
 remove-except --dry-run --size-at-least 1024 --size-below 1048576 '**/*.log'
 ```
 
-`--size-at-least` keeps files at or above the specified byte count; `--size-below` keeps files below it. Either bound may be used alone. Values must contain only ASCII decimal digits within the `u64` range. Leading zeroes are allowed; signs, whitespace, and unit suffixes are not. File size means the logical length reported by filesystem metadata, not allocated disk space. `--size-below 0` is invalid because it describes an empty range. `--size-at-least 0` is valid and includes empty files.
+`--size-at-least` keeps files at or above the specified byte count; `--size-below` keeps files below it. Either bound may be used alone. When both are specified, `--size-at-least` must be less than `--size-below`. Values must contain only ASCII decimal digits within the `u64` range. Leading zeroes are allowed; signs, whitespace, and unit suffixes are not. File size means the logical length reported by filesystem metadata, not allocated disk space. `--size-below 0` is invalid because it describes an empty range. `--size-at-least 0` is valid and includes empty files.
 
 When patterns are supplied, a regular file is directly kept only if it matches any pattern and every specified time and size bound. A literal directory pattern does not bypass size filtering on its descendants. Ancestors of matching files are kept, but directories, symlinks, and special files cannot directly match a size filter. Pattern-only behavior is unchanged when neither time nor size filtering is active.
 

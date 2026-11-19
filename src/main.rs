@@ -96,7 +96,7 @@ struct Args {
         long,
         value_name = "BYTES",
         value_parser = parse_size_bound,
-        help = "Keep regular files with a logical size at or above this byte count"
+        help = "Keep regular files with a logical size at or above this byte count. If both bounds are specified, --size-at-least must be less than --size-below."
     )]
     size_at_least: Option<u64>,
 
