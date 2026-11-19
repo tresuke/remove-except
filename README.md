@@ -231,7 +231,7 @@ In this example tree, the pattern keeps `reports/report1.csv`, `reports/report2.
 
 ### Selecting Subdirectories
 
-To keep an entire subdirectory, specify its path without a glob.
+When neither a modification-time nor a file-size filter is set, specify a subdirectory's path without a glob to keep it and all its contents.
 
 ```sh
 remove-except --dry-run reports/2025
@@ -253,7 +253,7 @@ To keep only certain file types within a subdirectory, combine its path with a g
 remove-except --dry-run 'reports/2025/*.csv'
 ```
 
-This example keeps `reports/2025/annual.csv`; `reports/2025/notes.txt` is a deletion target. Since `*` matches only within one level, `reports/2025/*.csv` is limited to CSV files directly under `reports/2025`. To include deeper levels, use `reports/2025/**/*.csv`. To keep the entire directory, specify its path, such as `reports/2025`, without a glob.
+This example keeps `reports/2025/annual.csv`; `reports/2025/notes.txt` is a deletion target. Since `*` matches only within one level, `reports/2025/*.csv` is limited to CSV files directly under `reports/2025`. To include deeper levels, use `reports/2025/**/*.csv`.
 
 ### Processing Scope and Paths
 
@@ -267,13 +267,15 @@ Absolute patterns are compared with the processing directory after symbolic link
 
 ### Matching and Retention
 
-Patterns support `*`, `**`, `?`, character classes `[]`, and alternation `{a,b}`. Files, directories, and symbolic links can match. See the examples above for `*`, `**`, `?`, a character class, and path-separator behavior. See the rest of this section for alternation and retention rules.
+Patterns support `*`, `**`, `?`, character classes `[]`, and alternation `{a,b}`. See the examples above for `*`, `**`, `?`, a character class, and path-separator behavior.
 
 `?` and a character class each match one Unicode scalar value, not one byte or one user-perceived grapheme. A character made from a base character and combining marks therefore requires multiple `?` wildcards.
 
 On Ubuntu, `**` also matches items whose names contain newlines. Escape a literal backslash as `\\`; following text such as `x80` remains literal, not a hexadecimal escape. Correcting Unicode matching can change keep/delete results compared with the previous byte-based matching on Ubuntu. Review all items with `--dry-run` and without `--summary` before deleting.
 
-A matched item and its parent directories are kept, but unmatched descendants are not. A directory path without a glob keeps that directory and all of its contents. `dir/*` matches only items directly under `dir`; it does not recursively keep the contents of matched subdirectories. `.` and `./` keep everything under the processing directory.
+When a modification-time or file-size filter is set, only regular files that satisfy every specified bound and match at least one pattern (if patterns are supplied) are kept, along with their required ancestors. Even a pattern match does not protect a file that fails a filter or an empty directory. For example, with `--size-at-least 1 .`, empty files and empty directories are deletion targets.
+
+The retention rules below apply only when neither filter is set. Files, directories, and symbolic links can match directly. A glob match keeps the matched item and its parent directories, but not unmatched descendants. A directory path without a glob keeps that directory and all of its contents. `dir/*` matches only items directly under `dir`; it does not recursively keep the contents of matched subdirectories. `.` and `./` keep everything under the processing directory.
 
 The glob characters are `*`, `?`, `[`, `{`, and `}`. On Ubuntu, `\` is also a glob character because it escapes the next character. A pattern containing any of them is treated as a glob and does not keep the contents of matched directories. For example, `reports/{2024,2025}` keeps only the two directories. To keep their contents too, append `/**`, as in `reports/{2024,2025}/**`, or specify `reports/2024` and `reports/2025` separately.
 
