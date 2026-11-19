@@ -48,10 +48,59 @@ impl ModifiedRange {
     }
 }
 
+/// A half-open range of file sizes in bytes.
+///
+/// The lower bound is inclusive and the upper bound is exclusive. File sizes are
+/// logical lengths reported by filesystem metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SizeRange {
+    at_least: Option<u64>,
+    below: Option<u64>,
+}
+
+impl SizeRange {
+    /// Constructs a size range with at least one bound.
+    ///
+    /// Returns a [`crate::ValidationError`] if both bounds are absent, the exclusive
+    /// upper bound is zero, or the lower bound is greater than or equal to the upper bound.
+    pub fn new(at_least: Option<u64>, below: Option<u64>) -> Result<Self> {
+        if at_least.is_none() && below.is_none() {
+            return Err(invalid("At least one file-size bound is required"));
+        }
+        if below == Some(0) {
+            return Err(invalid("File-size upper bound must be greater than zero"));
+        }
+        if let (Some(at_least), Some(below)) = (at_least, below)
+            && at_least >= below
+        {
+            return Err(invalid(
+                "File-size lower bound must be less than the upper bound",
+            ));
+        }
+        Ok(Self { at_least, below })
+    }
+
+    /// Returns the inclusive lower bound in bytes, if specified.
+    pub fn at_least(&self) -> Option<u64> {
+        self.at_least
+    }
+
+    /// Returns the exclusive upper bound in bytes, if specified.
+    pub fn below(&self) -> Option<u64> {
+        self.below
+    }
+
+    pub(crate) fn contains(&self, size: u64) -> bool {
+        self.at_least.is_none_or(|at_least| size >= at_least)
+            && self.below.is_none_or(|below| size < below)
+    }
+}
+
 /// Optional conditions used while generating a removal plan.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlanOptions {
     modified_range: Option<ModifiedRange>,
+    size_range: Option<SizeRange>,
 }
 
 impl PlanOptions {
@@ -59,12 +108,27 @@ impl PlanOptions {
     pub fn new(modified_range: ModifiedRange) -> Self {
         Self {
             modified_range: Some(modified_range),
+            size_range: None,
         }
+    }
+
+    /// Adds a file-size range to these options.
+    ///
+    /// This can be used with [`PlanOptions::default`] for size-only selection or chained
+    /// after [`PlanOptions::new`] to combine size and modification-time conditions.
+    pub fn with_size_range(mut self, size_range: SizeRange) -> Self {
+        self.size_range = Some(size_range);
+        self
     }
 
     /// Returns the modification-time range, if specified.
     pub fn modified_range(&self) -> Option<&ModifiedRange> {
         self.modified_range.as_ref()
+    }
+
+    /// Returns the file-size range, if specified.
+    pub fn size_range(&self) -> Option<&SizeRange> {
+        self.size_range.as_ref()
     }
 }
 
@@ -137,6 +201,7 @@ pub struct RemovalPlan {
     /// Number of items directly matching all keep conditions; ancestors alone are not counted.
     pub(crate) direct_match_count: usize,
     pub(crate) modified_range: Option<ModifiedRange>,
+    pub(crate) size_range: Option<SizeRange>,
     /// Items to keep and their ancestors, sorted by relative path.
     pub(crate) keep_items: Vec<PlannedItem>,
     /// All deletion targets, sorted by relative path.
@@ -164,6 +229,11 @@ impl RemovalPlan {
     /// Returns the modification-time range used to create the plan, if specified.
     pub fn modified_range(&self) -> Option<&ModifiedRange> {
         self.modified_range.as_ref()
+    }
+
+    /// Returns the file-size range used to create the plan, if specified.
+    pub fn size_range(&self) -> Option<&SizeRange> {
+        self.size_range.as_ref()
     }
 
     /// Returns all kept items and their required ancestor directories, sorted by relative path.
