@@ -2601,8 +2601,6 @@ fn help_documents_pipeline_options_and_exit_codes() {
     assert!(output.contains("--max-delete-items"));
     assert!(output.contains("guards"));
     assert!(output.contains("guard_violations"));
-    assert!(output.contains("--require-match"));
-    assert!(output.contains("--max-delete-items"));
     assert!(output.contains("--format <FORMAT>"));
     assert!(output.contains("schema_version 2"));
     assert!(output.contains("Exit codes:"));
