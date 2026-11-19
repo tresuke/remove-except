@@ -2597,9 +2597,18 @@ fn help_documents_pipeline_options_and_exit_codes() {
     let output = String::from_utf8_lossy(&output);
 
     assert!(output.contains("--patterns-from-stdin"));
+    assert!(output.contains("--require-match"));
+    assert!(output.contains("--max-delete-items"));
+    assert!(output.contains("guards"));
+    assert!(output.contains("guard_violations"));
+    assert!(output.contains("--require-match"));
+    assert!(output.contains("--max-delete-items"));
     assert!(output.contains("--format <FORMAT>"));
     assert!(output.contains("schema_version 2"));
     assert!(output.contains("Exit codes:"));
+    assert!(output.contains("A dry-run violation does not itself change the exit code"));
+    assert!(output.contains("viewer cancellation exits 3"));
+    assert!(output.contains("viewer startup or terminal errors exit 1"));
     let confirmation_line = output
         .lines()
         .find(|line| line.contains("Pending viewer input"))
@@ -2623,4 +2632,330 @@ fn help_documents_modification_time_formats() {
     assert!(output.contains("YYYY-MM-DDTHH:MM[:SS]"));
     assert!(output.contains("YYYY-MM-DD HH:MM[:SS]"));
     assert!(output.contains("Date-times may include Z or +/-HH:MM"));
+}
+
+#[test]
+fn force_require_match_rejects_zero_matches_without_deleting() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--require-match", "missing.txt"])
+        .assert()
+        .code(3)
+        .get_output()
+        .clone();
+
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--require-match"));
+    temp.child("remove.txt").assert("remove");
+}
+
+#[test]
+fn normal_require_match_rejects_before_confirmation_and_viewer() {
+    for pager in ["never", "always"] {
+        let temp = assert_fs::TempDir::new().unwrap();
+        temp.child("remove.txt").write_str("remove").unwrap();
+
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["--require-match", "--pager", pager, "missing.txt"])
+            .assert()
+            .code(3)
+            .get_output()
+            .clone();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stderr.contains("--require-match"));
+        assert!(!stderr.contains("Are you sure"));
+        assert!(!stderr.contains("Cannot start the requested viewer"));
+        assert!(stdout.contains("remove.txt"));
+        assert!(!stdout.contains("c finish"));
+        temp.child("remove.txt").assert("remove");
+    }
+}
+
+#[test]
+fn dry_run_guard_violation_prints_human_plan_without_viewer_or_deletion() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--dry-run",
+            "--max-delete-items",
+            "0",
+            "--pager",
+            "never",
+            "keep.txt",
+        ])
+        .assert()
+        .code(0)
+        .get_output()
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("PREVIEW ONLY"));
+    let (keep_section, delete_section) = stdout.split_once("Items to delete").unwrap();
+    assert!(keep_section.contains("Items to keep"));
+    assert!(keep_section.contains("keep.txt"));
+    assert!(delete_section.contains("remove.txt"));
+    assert!(stderr.contains("SAFETY GUARD: --max-delete-items"));
+    assert!(stderr.contains("exceed the maximum of 0"));
+    temp.child("keep.txt").assert("keep");
+    temp.child("remove.txt").assert("remove");
+}
+
+#[test]
+fn dry_run_guard_violation_with_unavailable_always_viewer_uses_viewer_error_code() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+
+    let output = command_without_terminal()
+        .current_dir(temp.path())
+        .args([
+            "--dry-run",
+            "--max-delete-items",
+            "0",
+            "--pager",
+            "always",
+            "keep.txt",
+        ])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Cannot start the requested viewer"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--max-delete-items"));
+    temp.child("remove.txt").assert("remove");
+}
+
+#[test]
+fn require_match_distinguishes_empty_and_positive_delete_free_plans() {
+    let temp = assert_fs::TempDir::new().unwrap();
+
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--require-match", "."])
+        .assert()
+        .code(3);
+
+    temp.child("keep.txt").write_str("keep").unwrap();
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--require-match", "keep.txt"])
+        .assert()
+        .success();
+    temp.child("keep.txt").assert("keep");
+}
+
+#[test]
+fn max_delete_items_accepts_u64_max() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--force",
+            "--max-delete-items",
+            "18446744073709551615",
+            "keep.txt",
+        ])
+        .assert()
+        .success();
+    temp.child("keep.txt").assert("keep");
+    assert!(!temp.path().join("remove.txt").exists());
+}
+
+#[test]
+fn json_always_contains_guard_fields_when_guards_are_unspecified() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--dry-run", "--format", "json", "keep.txt"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let plan = parse_json_stdout(&output);
+    assert_eq!(
+        plan["guards"],
+        serde_json::json!({
+            "require_match": false,
+            "max_delete_items": null
+        })
+    );
+    assert_eq!(plan["guard_violations"], serde_json::json!([]));
+}
+
+#[test]
+fn json_force_guard_violation_keeps_machine_output_and_file() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--force",
+            "--format",
+            "json",
+            "--max-delete-items",
+            "0",
+            "keep.txt",
+        ])
+        .assert()
+        .code(3)
+        .get_output()
+        .clone();
+
+    let plan = parse_json_stdout(&output);
+    assert_eq!(
+        plan["guard_violations"],
+        serde_json::json!(["max_delete_items"])
+    );
+    assert_eq!(
+        plan["guards"],
+        serde_json::json!({
+            "require_match": false,
+            "max_delete_items": 0
+        })
+    );
+    temp.child("remove.txt").assert("remove");
+}
+
+#[test]
+fn force_max_delete_items_rejects_nested_and_descendant_counts() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("remove/nested/deep.txt")
+        .write_str("remove")
+        .unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--max-delete-items", "2", "keep.txt"])
+        .assert()
+        .code(3)
+        .get_output()
+        .clone();
+
+    assert!(String::from_utf8_lossy(&output.stderr).contains("3 deletion items"));
+    temp.child("remove/nested/deep.txt").assert("remove");
+}
+
+#[test]
+fn max_delete_items_allows_exact_limit_and_zero_for_no_removals() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("keep.txt").write_str("keep").unwrap();
+    temp.child("remove.txt").write_str("remove").unwrap();
+
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--max-delete-items", "1", "keep.txt"])
+        .assert()
+        .success();
+    assert!(!temp.path().join("remove.txt").exists());
+
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--max-delete-items", "0", "."])
+        .assert()
+        .success();
+    temp.child("keep.txt").assert("keep");
+
+    temp.child("remove.txt").write_str("remove").unwrap();
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--force", "--max-delete-items", "0", "keep.txt"])
+        .assert()
+        .code(3);
+    temp.child("remove.txt").assert("remove");
+}
+
+#[test]
+fn dry_run_reports_both_guard_violations_in_json_and_exits_zero() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    temp.child("remove/nested.txt").write_str("remove").unwrap();
+
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--dry-run",
+            "--format",
+            "json",
+            "--require-match",
+            "--max-delete-items",
+            "1",
+            "missing.txt",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let plan = parse_json_stdout(&output);
+    assert_eq!(
+        plan["guards"],
+        serde_json::json!({
+            "require_match": true,
+            "max_delete_items": 1
+        })
+    );
+    assert_eq!(
+        plan["guard_violations"],
+        serde_json::json!(["require_match", "max_delete_items"])
+    );
+    temp.child("remove/nested.txt").assert("remove");
+}
+
+#[test]
+fn duplicate_or_invalid_max_delete_items_uses_input_error_code() {
+    let temp = assert_fs::TempDir::new().unwrap();
+
+    Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--dry-run",
+            "--max-delete-items",
+            "1",
+            "--max-delete-items",
+            "2",
+            ".",
+        ])
+        .assert()
+        .code(2);
+
+    for invalid in ["", "-1", "+1", " 1", "1 ", "1MB", "18446744073709551616"] {
+        Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["--dry-run", "--max-delete-items", invalid, "."])
+            .assert()
+            .code(2);
+    }
 }
