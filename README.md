@@ -118,6 +118,8 @@ remove-except --root work --dry-run keep.txt '**/*.md'
 | `-n`, `--dry-run` | Displays kept items and deletion targets without deleting anything. |
 | `-f`, `--force` | Deletes without showing the confirmation prompt. Pattern and directory validation still apply. |
 | `--patterns-from-stdin` | Reads keep patterns from standard input, one per line. They are combined with positional patterns using OR semantics. |
+| `--require-match` | Rejects deletion when no item directly matches all keep conditions. |
+| `--max-delete-items <N>` | Rejects deletion when more than N deletion items would be removed, including descendants under deletion directories. |
 | `--modified-since <DATE_TIME>` | Inclusive modification-time lower bound. |
 | `--modified-before <DATE_TIME>` | Exclusive modification-time upper bound. |
 | `--size-at-least <BYTES>` | Inclusive logical file-size lower bound in bytes. |
@@ -131,6 +133,22 @@ remove-except --root work --dry-run keep.txt '**/*.md'
 | `-V`, `--version` | Displays the version. |
 
 `--summary`, `--layout`, and `--sort-by-type` are only for human-readable output (`--format human`) and cannot be combined with `--format json`.
+
+### Safety Guards
+
+`--require-match` and `--max-delete-items <N>` apply only when explicitly specified.
+
+- `--require-match` rejects deletion when the direct keep-match count, excluding required ancestor directories, is zero. It also applies when there are no deletion targets.
+- `--max-delete-items <N>` compares `delete_items`, including descendants under deletion directories, against N. It does not compare `delete_roots`.
+- When both guards are specified, both must pass.
+- `--force` cannot bypass either guard.
+- Guards evaluate the removal plan after all keep conditions have been applied, including any file-size bounds. They do not rescan the filesystem.
+
+`N` is an ASCII decimal `u64` value; leading zeroes are allowed. Negative values, signs, whitespace, and unit suffixes are rejected. Zero is allowed and permits only plans with no deletion items. Repeating `--max-delete-items` is an invalid argument.
+
+Dry runs report guard violations, but a violation does not itself change the exit code: successful plan display or viewer completion exits 0, viewer cancellation exits 3, and viewer startup or terminal errors exit 1. A dry run never deletes.
+
+On a guard violation, normal and `--force` runs report the violations and rejection on stderr, skip the human-readable preview, viewer, confirmation, and deletion, and exit 3. Human-readable mode writes nothing to stdout on rejection; JSON mode still writes the pre-deletion plan and guard information. The guards evaluate plan-time counts only and do not protect against or detect filesystem changes after planning.
 
 ### Keeping by Modification Time
 
@@ -409,6 +427,8 @@ With `--format json`, the pre-deletion plan is written to standard output as exa
   "schema_version": 2,
   "root": "/home/user/work",
   "direct_match_count": 1,
+  "guards": { "require_match": false, "max_delete_items": null },
+  "guard_violations": [],
   "selection": { "patterns": ["keep.txt"], "modified_since": null, "modified_before": null, "size_at_least": null, "size_below": null },
   "keep_items": [
     { "relative_path": "keep.txt", "type": "file" }
@@ -428,6 +448,8 @@ With `--format json`, the pre-deletion plan is written to standard output as exa
 | `schema_version` | Version of the JSON format. Currently `2`. |
 | `root` | Absolute path of the normalized processing directory in native OS notation. On Windows it may start with `\\?\`. |
 | `direct_match_count` | Number of items directly matching all keep conditions. `0` means every item is a deletion target. |
+| `guards` | Guard settings. When unspecified: `require_match: false` and `max_delete_items: null`. |
+| `guard_violations` | Guard names violated by this plan. `[]` when unspecified or not violated. |
 | `selection` | Input-order `patterns`, UTC second-precision `modified_since` and `modified_before`, and integer-byte `size_at_least` and `size_below`; absent bounds are `null`. |
 | `keep_items` | Items matching the keep conditions and their ancestor directories. |
 | `delete_items` | All deletion targets. |
@@ -439,13 +461,15 @@ Size bounds are JSON integers. JavaScript `Number` cannot represent every intege
 
 `--format json` output is the plan before deletion, not the result of execution.
 
-- With `--dry-run`: the plan is printed and nothing is deleted.
-- Without `--dry-run`: the plan is printed, then confirmation is requested. A cancelled run exits with code 3. Because the JSON is printed before deletion, use the exit code (`0` for completed deletion, `3` for cancellation) to tell whether anything was deleted.
-- With `--force`: the plan is printed, then items are deleted without confirmation.
+- With `--dry-run`: the plan, including guard settings, is printed and nothing is deleted. In JSON mode, a guard violation exits `0`; JSON does not use the viewer.
+- Without `--dry-run`: if guards pass, the plan is printed, then confirmation is requested. A guard violation prints the plan and violations, performs no confirmation or deletion, and exits `3`.
+- With `--force`: if guards pass, the plan is printed and items are deleted without confirmation. A guard violation exits `3` and deletes nothing.
 
 `--summary`, `--layout`, and `--sort-by-type` are for human-readable output and cannot be combined with `--format json` (exit code 2).
+JSON does not use the viewer. Combining `--pager always` with JSON is invalid (exit code 2).
 
 Compatibility: schema 2 generalizes `direct_match_count` to all keep conditions. Consumers checking schema 1 must update. Fields may be added without changing `schema_version`; ignore unknown fields.
+Whether or not safety guards are specified, JSON always includes `guards` (the configured settings) and `guard_violations` (the violated guard names). Guard violations still emit the pre-deletion plan. A JSON dry run exits `0` on violation; normal execution or `--force` exits `3` and performs no deletion. For human-readable dry runs, the viewer outcome takes precedence: completion exits `0`, cancellation exits `3`, and viewer startup or terminal errors exit `1`.
 
 Bash example (list deletion targets with jq):
 
@@ -469,7 +493,9 @@ When reading JSON in PowerShell, also check that it is decoded as UTF-8. See “
 | `0` | The plan was shown, or deletion completed (including when there was nothing to delete). |
 | `1` | Runtime error, such as a scan, metadata retrieval, time-zone detection or deletion failure, non-Unicode path, or viewer/terminal error. |
 | `2` | Invalid arguments, standard input, processing directory, patterns, modification times, or file sizes. |
-| `3` | Nothing was deleted because viewing or confirmation was cancelled, or no terminal was available to confirm. |
+| `3` | Nothing was deleted because viewing or confirmation was cancelled, or no terminal was available to confirm. Normal and `--force` safety guard violations also use this code. |
+
+A dry-run guard violation does not itself change the exit code. JSON or successful human output exits `0`; viewer cancellation exits `3`, and viewer startup or terminal errors exit `1`.
 
 If an error occurs during deletion (exit code 1), items already deleted are not restored.
 

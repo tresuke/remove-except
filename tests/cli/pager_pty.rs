@@ -447,6 +447,24 @@ fn pty_cancellation_and_dry_run_restore_terminal_without_deleting() {
 }
 
 #[test]
+fn pty_dry_run_guard_violation_preserves_viewer_completion_and_cancellation_codes() {
+    for (key, expected) in [(b"c".as_slice(), 0), (b"q".as_slice(), 3)] {
+        let root = fixture();
+        let mut session = Session::start(
+            root.path(),
+            &["--dry-run", "--max-delete-items", "0", "--pager", "always"],
+            false,
+        );
+        session.wait_for("SAFETY GUARD");
+        session.wait_for("c finish");
+        session.send(key);
+        session.exit(expected);
+        assert!(session.output.contains("exceed the maximum of 0"));
+        root.child("remove-00.txt").assert("remove");
+    }
+}
+
+#[test]
 fn pty_resize_failure_stops_without_deleting_and_restores_input() {
     let root = fixture();
     let mut session = Session::start(root.path(), &["--pager", "always"], false);
