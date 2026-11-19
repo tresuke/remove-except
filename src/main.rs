@@ -35,7 +35,7 @@ const HELP_STYLES: Styles = Styles::styled()
     version,
     about = "Keep matching items and remove the rest under a processing root",
     long_about = "Keep items matching paths or glob patterns and/or modification-time bounds and remove the rest under the selected root. Multiple patterns are combined with OR; the time range is combined with AND. Time filtering keeps only regular files and their ancestors. Always review the plan before deleting items. The normalized root and scanned entry paths must be representable as Unicode. Otherwise, nothing is printed to stdout or deleted (exit code 1), even with --force.",
-    after_long_help = "Output:\n  Tree: directories end with / and symlinks with @. With color, directories are blue, symlinks cyan, and kept parent directories in the delete tree green. Without color, kept parents end with +.\n  Flat: ItemType identifies each entry. Without color, directory and symlink paths end with / and @. Flat output has no kept-parent marker.\n  Status labels: NO REMOVALS (green) when there are no deletion operations; otherwise PREVIEW ONLY (cyan) for dry runs, CONFIRM TO DELETE (yellow) when confirmation is required, FORCE DELETE (red) with --force.\n  Colors are used automatically when output is a terminal and color is available.\n\nViewer:\n  --pager auto (default) pages long human output on supported terminals in normal and dry runs. JSON and --force bypass it. --pager always conflicts with JSON and --force; --pager never uses normal output.\n  Up/Down scroll, PageUp/PageDown page, Home/End move to the beginning/end, Tab/Shift+Tab switch sections. Long paths wrap without truncation. c finishes viewing; q/Esc/Ctrl+C cancel (code 3). Enter and y never approve deletion in the viewer.\n  Pending viewer input is discarded before a separate whole-line terminal confirmation. Only a newline-terminated y/yes confirms (case-insensitive, surrounding whitespace ignored); anything else or EOF cancels.\n  Auto explains unavailable-terminal fallback on stderr; always fails with code 1. Terminal errors after startup stop without deletion. Human final confirmation repeats root, counts, and applicable warnings on stderr.\n\nModification times:\n  --modified-since is inclusive and --modified-before is exclusive; either may be used alone. Accept YYYY-MM-DD, YYYY-MM-DDTHH:MM[:SS], or YYYY-MM-DD HH:MM[:SS]. Date-times may include Z or +/-HH:MM. Date-only and offset-free date-times use local time. Fractional seconds and ambiguous local times are rejected. Only matching regular files and their ancestors are kept; links and empty directories may be deleted.\n\nPipelines:\n  --patterns-from-stdin reads one UTF-8 pattern per line (LF or CRLF). A leading BOM is removed, empty lines are ignored, other whitespace is kept, and # has no special meaning. Invalid UTF-8 or NUL characters (for example, UTF-16 input) are rejected. Confirmation is then read from the terminal; without one, nothing is deleted.\n  --format json writes exactly one JSON object (schema_version 2) with root, direct_match_count, selection, keep_items, delete_items, and delete_roots to stdout. Messages and prompts go to stderr. New fields may be added without changing schema_version.\n\nExit codes:\n  0 plan shown or deletion completed; 1 runtime error (including viewer errors); 2 invalid arguments, input, root, or patterns; 3 nothing deleted because viewing was cancelled or confirmation was declined or unavailable.",
+    after_long_help = "Output:\n  Tree: directories end with / and symlinks with @. With color, directories are blue, symlinks cyan, and kept parent directories in the delete tree green. Without color, kept parents end with +.\n  Flat: ItemType identifies each entry. Without color, directory and symlink paths end with / and @. Flat output has no kept-parent marker.\n  Status labels: NO REMOVALS (green) when there are no deletion operations; otherwise PREVIEW ONLY (cyan) for dry runs, CONFIRM TO DELETE (yellow) when confirmation is required, FORCE DELETE (red) with --force.\n  Colors are used automatically when output is a terminal and color is available.\n\nViewer:\n  --pager auto (default) pages long human output on supported terminals in normal and dry runs. JSON and --force bypass it. --pager always conflicts with JSON and --force; --pager never uses normal output.\n  Up/Down scroll, PageUp/PageDown page, Home/End move to the beginning/end, Tab/Shift+Tab switch sections. Long paths wrap without truncation. c finishes viewing; q/Esc/Ctrl+C cancel (code 3). Enter and y never approve deletion in the viewer.\n  Pending viewer input is discarded before a separate whole-line terminal confirmation. Only a newline-terminated y/yes confirms (case-insensitive, surrounding whitespace ignored); anything else or EOF cancels.\n  Auto explains unavailable-terminal fallback on stderr; always fails with code 1. Terminal errors after startup stop without deletion. Human final confirmation repeats root, counts, and applicable warnings on stderr.\n\nModification times:\n  --modified-since is inclusive and --modified-before is exclusive; either may be used alone. Accept YYYY-MM-DD, YYYY-MM-DDTHH:MM[:SS], or YYYY-MM-DD HH:MM[:SS]. Date-times may include Z or +/-HH:MM. Date-only and offset-free date-times use local time. Fractional seconds and ambiguous local times are rejected. Only matching regular files and their ancestors are kept; links and empty directories may be deleted.\n\nPipelines:\n  --patterns-from-stdin reads one UTF-8 pattern per line (LF or CRLF). A leading BOM is removed, empty lines are ignored, other whitespace is kept, and # has no special meaning. Invalid UTF-8 or NUL characters (for example, UTF-16 input) are rejected. Confirmation is then read from the terminal; without one, nothing is deleted.\n\nSafety guards:\n  --require-match rejects deletion when direct keep matches are 0, including runs with no deletion targets. --max-delete-items <N> rejects deletion when delete_items contains more than N items; directory descendants count. Both may be used together. Normal and force runs reject violations before viewing or confirmation, display the plan and violations, and exit 3. A dry-run violation does not itself change the exit code: normal output or viewer completion exits 0, viewer cancellation exits 3, and viewer startup or terminal errors exit 1. Dry-run never deletes. --force cannot bypass either guard.\n\nJSON:\n  --format json writes exactly one JSON object (schema_version 2) with root, direct_match_count, guards, guard_violations, selection, keep_items, delete_items, and delete_roots to stdout. Messages and prompts go to stderr. New fields may be added without changing schema_version.\n\nExit codes:\n  0 plan shown or deletion completed; 1 runtime error (including viewer errors); 2 invalid arguments, input, root, or patterns; 3 nothing deleted because viewing or confirmation was cancelled or unavailable, or normal/force deletion was rejected by a safety guard. For a dry-run guard violation, normal display or viewer completion exits 0, viewer cancellation exits 3, and viewer errors exit 1.",
     styles = HELP_STYLES
 )]
 struct Args {
@@ -61,6 +61,21 @@ struct Args {
         help = "Also read keep patterns from standard input, one per line"
     )]
     patterns_from_stdin: bool,
+
+    #[arg(
+        long,
+        help = "Reject deletion unless at least one item directly matches all keep conditions"
+    )]
+    require_match: bool,
+
+    #[arg(
+        long,
+        value_name = "N",
+        value_parser = parse_delete_item_limit,
+        action = clap::ArgAction::Append,
+        help = "Reject deletion when more than N items, including descendants, would be deleted"
+    )]
+    max_delete_items: Vec<u64>,
 
     #[arg(
         long,
@@ -187,7 +202,8 @@ struct PlanDisplayOptions {
 enum Outcome {
     /// The plan was shown, or deletion completed.
     Completed,
-    /// Nothing was deleted because confirmation was declined or unavailable.
+    /// Nothing was deleted: a safety guard rejected the plan, viewing was cancelled,
+    /// or confirmation was declined or unavailable.
     NotExecuted,
 }
 
@@ -218,6 +234,14 @@ fn main() -> ExitCode {
 }
 
 fn validate_option_combinations(args: &Args) {
+    if args.max_delete_items.len() > 1 {
+        Args::command()
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "--max-delete-items can be specified only once",
+            )
+            .exit();
+    }
     if args.pager == PagerMode::Always && (args.format == OutputFormat::Json || args.force) {
         Args::command()
             .error(
@@ -264,6 +288,61 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum SafetyGuardViolation {
+    RequireMatch,
+    MaxDeleteItems { actual: u64, maximum: u64 },
+}
+
+impl SafetyGuardViolation {
+    fn json_name(&self) -> &'static str {
+        match self {
+            Self::RequireMatch => "require_match",
+            Self::MaxDeleteItems { .. } => "max_delete_items",
+        }
+    }
+}
+
+fn evaluate_safety_guards(plan: &RemovalPlan, args: &Args) -> Vec<SafetyGuardViolation> {
+    let mut violations = Vec::new();
+    if args.require_match && plan.direct_match_count() == 0 {
+        violations.push(SafetyGuardViolation::RequireMatch);
+    }
+    if let Some(&maximum) = args.max_delete_items.first() {
+        let actual = u64::try_from(plan.delete_items().len()).unwrap_or(u64::MAX);
+        if actual > maximum {
+            violations.push(SafetyGuardViolation::MaxDeleteItems { actual, maximum });
+        }
+    }
+    violations
+}
+
+fn report_safety_guard_violations(violations: &[SafetyGuardViolation]) {
+    for violation in violations {
+        match violation {
+            SafetyGuardViolation::RequireMatch => {
+                eprintln!(
+                    "SAFETY GUARD: --require-match rejected the plan because direct keep matches are 0."
+                );
+            }
+            SafetyGuardViolation::MaxDeleteItems { actual, maximum } => {
+                eprintln!(
+                    "SAFETY GUARD: --max-delete-items rejected the plan: {actual} deletion items exceed the maximum of {maximum}."
+                );
+            }
+        }
+    }
+}
+
+fn parse_delete_item_limit(value: &str) -> std::result::Result<u64, String> {
+    if value.is_empty() || !value.as_bytes().iter().all(|byte| byte.is_ascii_digit()) {
+        return Err("Expected an ASCII decimal integer".to_owned());
+    }
+    value
+        .parse::<u64>()
+        .map_err(|_| "Delete-item limit must be in the u64 range".to_owned())
+}
+
 fn run(args: Args) -> Result<Outcome> {
     run_with_plan_builder(args, build_plan_with_options, &mut io::stdout())
 }
@@ -278,7 +357,7 @@ fn run_with_plan_builder(
         args.modified_since.as_deref(),
         args.modified_before.as_deref(),
     )?;
-    let mut patterns = args.patterns;
+    let mut patterns = args.patterns.clone();
     if args.patterns_from_stdin {
         let stdin = io::stdin();
         if stdin.is_terminal() {
@@ -294,11 +373,18 @@ fn run_with_plan_builder(
         patterns.extend(read_patterns(stdin.lock())?);
     }
     let current_dir = std::env::current_dir().context("Failed to get current directory")?;
-    let root = resolve_root(&current_dir, args.root)?;
+    let root = resolve_root(&current_dir, args.root.clone())?;
     let plan = build_plan(&root, &patterns, &selection.options)?;
+    let guard_violations = evaluate_safety_guards(&plan, &args);
     // Serialize before printing anything so an unrepresentable path never yields partial JSON.
     let json_plan = if json {
-        Some(json_plan_text(&plan, &patterns, &selection)?)
+        Some(json_plan_text(
+            &plan,
+            &patterns,
+            &selection,
+            &args,
+            &guard_violations,
+        )?)
     } else {
         None
     };
@@ -315,12 +401,36 @@ fn run_with_plan_builder(
         );
     }
 
+    report_safety_guard_violations(&guard_violations);
+
     let (keep_summary, delete_summary) = match args.summary {
         Some(SummarySection::Keep) => (true, false),
         Some(SummarySection::Delete) => (false, true),
         Some(SummarySection::Both) => (true, true),
         None => (false, false),
     };
+
+    if !guard_violations.is_empty() && !args.dry_run {
+        if let Some(json_plan) = json_plan.as_deref() {
+            output.write_all(json_plan.as_bytes())?;
+            output.flush()?;
+        } else {
+            print_plan(
+                output,
+                &plan,
+                true,
+                false,
+                keep_summary,
+                delete_summary,
+                args.layout == Some(Layout::Flat),
+                args.sort_by_type,
+                &selection,
+            )?;
+        }
+        eprintln!("Deletion rejected by safety guards; nothing was removed.");
+        return Ok(Outcome::NotExecuted);
+    }
+
     let mut viewed = false;
     if let Some(json_plan) = json_plan {
         output.write_all(json_plan.as_bytes())?;
@@ -505,10 +615,18 @@ struct JsonPlan<'a> {
     schema_version: u32,
     root: &'a str,
     direct_match_count: usize,
+    guards: JsonSafetyGuards,
+    guard_violations: Vec<&'static str>,
     selection: JsonSelection<'a>,
     keep_items: Vec<JsonItem<'a>>,
     delete_items: Vec<JsonItem<'a>>,
     delete_roots: Vec<JsonItem<'a>>,
+}
+
+#[derive(Serialize)]
+struct JsonSafetyGuards {
+    require_match: bool,
+    max_delete_items: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -530,12 +648,22 @@ fn json_plan_text(
     plan: &RemovalPlan,
     patterns: &[String],
     selection: &datetime::Selection,
+    args: &Args,
+    guard_violations: &[SafetyGuardViolation],
 ) -> Result<String> {
     let root = unicode_path(plan.root())?;
     let json_plan = JsonPlan {
         schema_version: JSON_SCHEMA_VERSION,
         root,
         direct_match_count: plan.direct_match_count(),
+        guards: JsonSafetyGuards {
+            require_match: args.require_match,
+            max_delete_items: args.max_delete_items.first().copied(),
+        },
+        guard_violations: guard_violations
+            .iter()
+            .map(SafetyGuardViolation::json_name)
+            .collect(),
         selection: JsonSelection {
             patterns,
             modified_since: selection.since.as_ref().map(|value| value.utc.as_str()),
