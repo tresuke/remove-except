@@ -40,7 +40,11 @@ fn write_powershell(command: &Command, output: &mut dyn Write) -> io::Result<()>
     )?;
     for arg in command.get_arguments().filter(|arg| !arg.is_hide_set()) {
         let Some(long) = arg.get_long() else { continue };
-        let values = arg.get_value_parser().possible_values();
+        let values = if arg.get_action().takes_values() {
+            arg.get_value_parser().possible_values()
+        } else {
+            None
+        };
         let values = values
             .into_iter()
             .flatten()
@@ -74,7 +78,22 @@ fn ps_literal(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
     use clap::builder::{PossibleValue, PossibleValuesParser};
+
+    #[test]
+    fn powershell_does_not_offer_values_for_boolean_flags() {
+        let mut output = Vec::new();
+        write_script(
+            CompletionShell::Powershell,
+            crate::Args::command(),
+            &mut output,
+        )
+        .unwrap();
+        let script = String::from_utf8(output).unwrap();
+        assert!(script.contains("'--force' = @()"));
+        assert!(script.contains("'--dry-run' = @()"));
+    }
 
     #[test]
     fn powershell_uses_visible_metadata_and_quotes_literals() {

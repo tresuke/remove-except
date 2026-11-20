@@ -176,18 +176,30 @@ fn completion_preserves_standard_help_version_and_separator() {
 fn completion_reports_closed_stdout_as_runtime_error() {
     use std::process::{Command as Process, Stdio};
 
-    for shell in ["bash", "powershell"] {
+    for (shell, closed_stderr) in [
+        ("bash", false),
+        ("powershell", false),
+        ("bash", true),
+        ("powershell", true),
+    ] {
         let (reader, writer) = std::io::pipe().unwrap();
         drop(reader);
-        let output = Process::new(env!("CARGO_BIN_EXE_remove-except"))
+        let mut command = Process::new(env!("CARGO_BIN_EXE_remove-except"));
+        command
             .args(["--generate-completion", shell])
-            .stdout(Stdio::from(writer))
-            .output()
-            .unwrap();
+            .stdout(Stdio::from(writer));
+        if closed_stderr {
+            let (reader, writer) = std::io::pipe().unwrap();
+            drop(reader);
+            command.stderr(Stdio::from(writer));
+        }
+        let output = command.output().unwrap();
         assert_eq!(output.status.code(), Some(1), "{shell}: {output:?}");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.starts_with("Error: could not write completion script:"));
-        assert!(!stderr.contains("panicked"));
+        if !closed_stderr {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.starts_with("Error: could not write completion script:"));
+            assert!(!stderr.contains("panicked"));
+        }
     }
 }
 

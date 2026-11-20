@@ -21,6 +21,10 @@ $fixture = Join-Path ([System.IO.Path]::GetTempPath()) "remove-except-completion
 New-Item -ItemType Directory -Path $fixture | Out-Null
 Push-Location -LiteralPath $fixture
 try {
+    Assert-Candidates 'remove-except --force ' @()
+    Assert-Candidates 'remove-except --dry-run ' @()
+    Assert-Candidates 'remove-except --force=' @()
+    Assert-Candidates 'remove-except --dry-run=' @()
     New-Item -ItemType File -Path completion-fixture.txt | Out-Null
     Assert-Candidates 'remove-except --gen' '--generate-completion'
     Assert-Candidates 'remove-except.exe --gen' '--generate-completion'
@@ -37,6 +41,8 @@ try {
     Assert-Candidates 'remove-except "--" --gen' @()
     Assert-Candidates 'remove-except --gen -- other' '--generate-completion' 'remove-except --gen'.Length
     $file = '.' + [System.IO.Path]::DirectorySeparatorChar + 'completion-fixture.txt'
+    Assert-Candidates 'remove-except --force completion-fi' $file
+    Assert-Candidates 'remove-except --dry-run completion-fi' $file
     Assert-Candidates 'remove-except --root completion-fi' $file
     Assert-Candidates 'remove-except -- completion-fi' $file
 } finally {

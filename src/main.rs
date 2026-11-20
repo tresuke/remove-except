@@ -304,7 +304,10 @@ fn main() -> ExitCode {
         return match completion::write_script(shell, Args::command(), &mut io::stdout().lock()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
-                eprintln!("Error: could not write completion script: {error}");
+                let _ = writeln!(
+                    io::stderr().lock(),
+                    "Error: could not write completion script: {error}"
+                );
                 ExitCode::from(EXIT_RUNTIME_ERROR)
             }
         };
