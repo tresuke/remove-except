@@ -20,7 +20,15 @@ pub(crate) fn write_script(
     let mut command = command.bin_name(&name);
     command.build();
     match shell {
-        CompletionShell::Bash => Bash.try_generate(&command, output)?,
+        CompletionShell::Bash => {
+            Bash.try_generate(&command, output)?;
+            // Reuse Bash's serialized registration without assuming the generator's
+            // function name or version-dependent completion options.
+            writeln!(
+                output,
+                "\ncomplete -p {name} >/dev/null && eval \"$(complete -p {name}) {name}.exe\""
+            )?;
+        }
         CompletionShell::Powershell => write_powershell(&command, output)?,
     }
     output.flush()

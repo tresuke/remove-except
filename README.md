@@ -137,6 +137,8 @@ remove-except --root work --dry-run keep.txt '**/*.md'
 
 ### Shell Completion
 
+On Windows, completion supports both `remove-except` and `remove-except.exe` command names.
+
 This feature requires a build that includes `--generate-completion` in `remove-except --help`. Previously published tags, binary assets, and crates do not gain this feature.
 
 The command writes only the script to stdout and does not read stdin, build a removal plan, or touch files. It exits `0` on success, `1` if writing fails, and `2` for invalid arguments or shell names. Do not pass keep patterns or execution options such as `--force`. A trailing `--` by itself is accepted, but a keep pattern after it is not. When clap encounters `-h`/`--help` or `-V`/`--version` as an option alongside an otherwise valid completion request, it displays only help or version information, respectively, and exits `0` without generating a script.
