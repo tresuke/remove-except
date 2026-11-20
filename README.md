@@ -129,10 +129,38 @@ remove-except --root work --dry-run keep.txt '**/*.md'
 | `--layout <LAYOUT>` | Output layout: `tree` (default) or `flat`. |
 | `--sort-by-type` | Flat layout only. Sorts by Directory, File, then Symlink. |
 | `--summary <SECTION>` | Shows counts for `keep`, `delete`, or `both` instead of paths in the selected sections. |
+| `--generate-completion <SHELL>` | Writes a static `bash` or `powershell` completion script to stdout. Do not combine with execution arguments. |
 | `-h`, `--help` | Displays help. |
 | `-V`, `--version` | Displays the version. |
 
 `--summary`, `--layout`, and `--sort-by-type` are only for human-readable output (`--format human`) and cannot be combined with `--format json`.
+
+### Shell Completion
+
+This feature requires a build that includes `--generate-completion` in `remove-except --help`. Previously published tags, binary assets, and crates do not gain this feature.
+
+The command writes only the script to stdout and does not read stdin, build a removal plan, or touch files. It exits `0` on success, `1` if writing fails, and `2` for invalid arguments or shell names. Do not pass keep patterns or execution options such as `--force`. A trailing `--` by itself is accepted, but a keep pattern after it is not. When clap encounters `-h`/`--help` or `-V`/`--version` as an option alongside an otherwise valid completion request, it displays only help or version information, respectively, and exits `0` without generating a script.
+
+**Ubuntu Bash and Windows Git Bash:** Add this to `~/.bashrc` (or to the login startup file if it does not source `~/.bashrc`). Use a trusted `remove-except` executable on `PATH`.
+
+```bash
+if _remove_except_completion=$(remove-except --generate-completion bash); then
+    eval "$_remove_except_completion"
+fi
+unset _remove_except_completion
+```
+
+**Windows PowerShell 5.1 and PowerShell 7 on Windows:** Add this to `$PROFILE` for each shell you use. Use a trusted `remove-except` executable on `PATH`.
+
+```powershell
+$removeExceptCompletion = remove-except --generate-completion powershell
+if ($LASTEXITCODE -eq 0) {
+    . ([scriptblock]::Create(($removeExceptCompletion -join "`n")))
+}
+Remove-Variable removeExceptCompletion
+```
+
+Open a new shell and try typing `remove-except --pa` or `remove-except --pager a`, then press Tab, not Enter. Both scripts are static; pressing Tab does not start `remove-except`. Bash uses the standard `clap_complete` Bash generator and follows its completion behavior. PowerShell completes long options and their finite values (space or `=` forms), and stops suggesting them after the `--` argument separator. Single-hyphen short options are not guaranteed to complete in PowerShell, but still work when typed. Neither script supplies application-specific path or keep-pattern suggestions; the shell can offer its own file and directory completions.
 
 ### Safety Guards
 
@@ -492,8 +520,8 @@ When reading JSON in PowerShell, also check that it is decoded as UTF-8. See “
 
 | Exit code | Meaning |
 | --- | --- |
-| `0` | The plan was shown, or deletion completed (including when there was nothing to delete). |
-| `1` | Runtime error, such as a scan, metadata retrieval, time-zone detection or deletion failure, non-Unicode path, or viewer/terminal error. |
+| `0` | The plan was shown, deletion completed (including when there was nothing to delete), a completion script was generated, or help/version was shown. |
+| `1` | Runtime error, such as a scan, metadata retrieval, time-zone detection or deletion failure, non-Unicode path, viewer/terminal error, or completion script output failure. |
 | `2` | Invalid arguments, standard input, processing directory, patterns, modification times, or file sizes. |
 | `3` | Nothing was deleted because viewing or confirmation was cancelled, or no terminal was available to confirm. Normal and `--force` safety guard violations also use this code. |
 

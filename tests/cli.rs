@@ -4,6 +4,194 @@ use assert_fs::prelude::*;
 mod support;
 
 #[test]
+fn completion_generation_does_not_read_stdin_or_touch_files() {
+    use std::process::{Command as Process, Stdio};
+    use std::time::{Duration, Instant};
+
+    let temp = assert_fs::TempDir::new().unwrap();
+    let sentinel = temp.child("sentinel.txt");
+    sentinel.write_str("untouched").unwrap();
+    for (args, code, script_start) in [
+        (
+            &["--generate-completion", "bash"][..],
+            0,
+            "_remove__except()",
+        ),
+        (
+            &["--generate-completion=powershell", "--"],
+            0,
+            "Register-ArgumentCompleter",
+        ),
+        (
+            &["--generate-completion", "bash", "--patterns-from-stdin"],
+            2,
+            "",
+        ),
+        (
+            &["--patterns-from-stdin", "--generate-completion", "bash"],
+            2,
+            "",
+        ),
+    ] {
+        let mut child = Process::new(env!("CARGO_BIN_EXE_remove-except"))
+            .current_dir(temp.path())
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while child.try_wait().unwrap().is_none() {
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("{args:?} did not exit while stdin was open");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let output = child.wait_with_output().unwrap();
+        drop(stdin);
+        assert_eq!(output.status.code(), Some(code), "{args:?}: {output:?}");
+        if code == 0 {
+            assert!(output.stdout.starts_with(script_start.as_bytes()));
+            assert!(output.stderr.is_empty());
+        } else {
+            assert!(output.stdout.is_empty());
+        }
+        sentinel.assert("untouched");
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
+}
+
+#[test]
+fn completion_is_exclusive_with_execution_arguments() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let sentinel = temp.child("sentinel.txt");
+    sentinel.write_str("untouched").unwrap();
+    for other in [
+        &["--force"][..],
+        &["-n"],
+        &["--root", "."],
+        &["--format", "human"],
+        &["--pager", "auto"],
+        &["--layout", "tree"],
+        &["--summary", "keep"],
+        &["--sort-by-type"],
+        &["--require-match"],
+        &["--max-delete-items", "1"],
+        &["--modified-since", "2026-01-01"],
+        &["--modified-before", "2026-01-01"],
+        &["--size-at-least", "0"],
+        &["--size-below", "1"],
+        &["absent.txt"],
+        &["--generate-completion", "powershell"],
+    ] {
+        let completion = ["--generate-completion", "bash"];
+        for args in [[&completion[..], other], [other, &completion]].map(|parts| parts.concat()) {
+            Command::cargo_bin("remove-except")
+                .unwrap()
+                .current_dir(temp.path())
+                .args(&args)
+                .assert()
+                .code(2)
+                .stdout("");
+        }
+    }
+    for args in [
+        &["--generate-completion"][..],
+        &["--generate-completion", "zsh"],
+        &["--generate-completion="],
+        &["--generate-completion", "BASH"],
+        &["--generate-completion", "bash", "--", "absent.txt"],
+    ] {
+        Command::cargo_bin("remove-except")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(args)
+            .assert()
+            .code(2)
+            .stdout("");
+    }
+    sentinel.assert("untouched");
+}
+
+#[test]
+fn completion_preserves_standard_help_version_and_separator() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    for info in ["--help", "-h", "--version", "-V"] {
+        let expected = Command::cargo_bin("remove-except")
+            .unwrap()
+            .arg(info)
+            .assert()
+            .success()
+            .stderr("")
+            .get_output()
+            .stdout
+            .clone();
+        for args in [
+            [info, "--generate-completion", "bash"],
+            ["--generate-completion", "bash", info],
+        ] {
+            Command::cargo_bin("remove-except")
+                .unwrap()
+                .args(args)
+                .assert()
+                .success()
+                .stderr("")
+                .stdout(expected.clone());
+        }
+    }
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "--dry-run",
+            "--format",
+            "json",
+            "--",
+            "--generate-completion",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert_eq!(
+        parse_json_stdout(&output)["selection"]["patterns"],
+        serde_json::json!(["--generate-completion"])
+    );
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["--generate-completion", "bash", "--"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(output.stdout.starts_with(b"_remove__except()"));
+}
+
+#[test]
+fn completion_reports_closed_stdout_as_runtime_error() {
+    use std::process::{Command as Process, Stdio};
+
+    for shell in ["bash", "powershell"] {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let output = Process::new(env!("CARGO_BIN_EXE_remove-except"))
+            .args(["--generate-completion", shell])
+            .stdout(Stdio::from(writer))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{shell}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.starts_with("Error: could not write completion script:"));
+        assert!(!stderr.contains("panicked"));
+    }
+}
+
+#[test]
 fn modification_time_json_combines_patterns_and_preserves_input_order() {
     use std::time::{Duration, SystemTime};
     let temp = assert_fs::TempDir::new().unwrap();
