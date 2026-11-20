@@ -129,10 +129,40 @@ remove-except --root work --dry-run keep.txt '**/*.md'
 | `--layout <LAYOUT>` | 表示形式。`tree`（既定）または `flat` を指定します。 |
 | `--sort-by-type` | Flat表示専用。Directory、File、Symlinkの順に並べます。 |
 | `--summary <SECTION>` | `keep`、`delete`、`both` のいずれかを件数表示にします。対象セクションのパスは表示されません。 |
+| `--generate-completion <SHELL>` | `bash` または `powershell` 用の静的な補完スクリプトを標準出力に書き出します。実行用の引数とは併用できません。 |
 | `-h`, `--help` | ヘルプを表示します。 |
 | `-V`, `--version` | バージョンを表示します。 |
 
 `--summary`、`--layout`、`--sort-by-type` は人向け表示（`--format human`）専用で、`--format json` とは併用できません。
+
+### シェル補完
+
+Windows では `remove-except` と `remove-except.exe` のどちらのコマンド名でも補完できます。
+
+`remove-except --help` に `--generate-completion` が表示されるビルドが必要です。既存の公開済みタグ、配布バイナリー、crateにはこの機能は追加されません。
+
+標準出力にはスクリプトだけを書き出し、標準入力の読み取り、削除計画の作成、ファイル操作は行いません。成功時は終了コード `0`、書き出しに失敗した場合は `1`、不正な引数やシェル名は `2` です。保持パターンや `--force` などの実行用オプションとは併用できません。末尾の `--` だけなら受理しますが、その後に保持パターンがある場合は受理しません。有効な補完指定とともに `-h`／`--help` または `-V`／`--version` がオプションとして解釈された場合は、clap 標準の動作でヘルプまたはバージョンだけを表示し、スクリプトは生成せず終了コード `0` で終了します。
+
+**Ubuntu Bash と Windows Git Bash：** 次を `~/.bashrc` に追加します。ログイン時の起動ファイルが `~/.bashrc` を読み込まない場合は、その起動ファイルに追加します。`PATH` 上の信頼できる `remove-except` 実行ファイルを使用してください。
+
+```bash
+if _remove_except_completion=$(remove-except --generate-completion bash); then
+    eval "$_remove_except_completion"
+fi
+unset _remove_except_completion
+```
+
+**Windows PowerShell 5.1 と Windows 上の PowerShell 7：** 使用する各シェルの `$PROFILE` に次を追加します。`PATH` 上の信頼できる `remove-except` 実行ファイルを使用してください。
+
+```powershell
+$removeExceptCompletion = remove-except --generate-completion powershell
+if ($LASTEXITCODE -eq 0) {
+    . ([scriptblock]::Create(($removeExceptCompletion -join "`n")))
+}
+Remove-Variable removeExceptCompletion
+```
+
+新しいシェルを開き、`remove-except --pa` や `remove-except --pager a` と入力して、Enter ではなく Tab を押してください。いずれも静的なスクリプトのため、Tab を押すたびに `remove-except` が起動することはありません。Bash は `clap_complete` 標準の Bash 生成器の補完動作に従います。PowerShell は長いオプション名と有限の値候補（空白区切りと `=` の両形式）を補完し、引数の区切り `--` より後ではそれらを候補に出しません。単一ハイフンの短縮形は PowerShell の補完保証外ですが、手入力では引き続き使えます。どちらもアプリ独自のパスや保持パターンの候補は生成しません。シェル標準のファイル・ディレクトリー補完が働く場合があります。
 
 ### 安全ガード
 
@@ -494,8 +524,8 @@ PowerShellでJSONを読み取る場合も、UTF-8として受け取る設定を�
 
 | 終了コード | 意味 |
 | --- | --- |
-| `0` | 計画を表示した、または削除が完了した（削除対象がない場合を含む） |
-| `1` | 実行時エラー（走査、メタデータ取得、タイムゾーン検出、削除の失敗、Unicodeで表せないパス、ビューアー・端末エラーなど） |
+| `0` | 計画を表示した、削除が完了した（削除対象がない場合を含む）、補完スクリプトを生成した、またはヘルプ・バージョンを表示した |
+| `1` | 実行時エラー（走査、メタデータ取得、タイムゾーン検出、削除の失敗、Unicodeで表せないパス、ビューアー・端末エラー、補完スクリプトの出力失敗など） |
 | `2` | 引数、標準入力、処理対象ディレクトリー、パターン、更新日時、ファイルサイズの不備 |
 | `3` | 閲覧・確認で中止した、または確認できる端末がなく、何も削除しなかった。通常実行・`--force`でガード違反があった場合も含みます。 |
 

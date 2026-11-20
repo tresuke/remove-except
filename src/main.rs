@@ -1,5 +1,6 @@
 //! Displays a keep/deletion plan beneath the current directory and deletes items after confirmation.
 
+mod completion;
 mod datetime;
 mod pager;
 
@@ -13,6 +14,7 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::builder::styling::{AnsiColor, Styles};
 use clap::{CommandFactory, Parser, ValueEnum};
+use completion::CompletionShell;
 use console::style;
 use remove_except::{
     ItemType, PlanOptions, PlannedItem, RemovalPlan, SizeRange, ValidationError,
@@ -149,12 +151,23 @@ struct Args {
     sort_by_type: bool,
 
     #[arg(
+        long,
+        value_enum,
+        value_name = "SHELL",
+        exclusive = true,
+        help = "Print a shell completion script to stdout without planning or deleting (use alone)",
+        long_help = "Print a static shell completion script to stdout without reading stdin, planning, or deleting. Do not combine with execution arguments. An empty trailing -- is allowed. Help and version options take precedence as usual. Exit codes: 0 on success, 1 on output failure, 2 on invalid arguments."
+    )]
+    generate_completion: Option<CompletionShell>,
+
+    #[arg(
         required_unless_present_any = [
             "patterns_from_stdin",
             "modified_since",
             "modified_before",
             "size_at_least",
-            "size_below"
+            "size_below",
+            "generate_completion"
         ],
         num_args = 0..,
         value_name = "KEEP_PATTERN",
@@ -287,6 +300,18 @@ fn resolve_selection(args: &Args) -> Result<Selection> {
 
 fn main() -> ExitCode {
     let args = Args::parse();
+    if let Some(shell) = args.generate_completion {
+        return match completion::write_script(shell, Args::command(), &mut io::stdout().lock()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                let _ = writeln!(
+                    io::stderr().lock(),
+                    "Error: could not write completion script: {error}"
+                );
+                ExitCode::from(EXIT_RUNTIME_ERROR)
+            }
+        };
+    }
     validate_option_combinations(&args);
 
     match run(args) {

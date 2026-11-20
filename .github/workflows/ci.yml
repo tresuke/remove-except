@@ -35,3 +35,39 @@ jobs:
 
       - name: Run Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Smoke-test Bash completion (Ubuntu Bash or Windows Git Bash)
+        if: matrix.toolchain == 'stable'
+        shell: bash
+        run: |
+          case "$RUNNER_OS:$OSTYPE" in
+            Linux:linux*) test -x target/debug/remove-except ;;
+            Windows:msys*|Windows:cygwin*) test -x target/debug/remove-except.exe ;;
+            *) echo "Unexpected Bash host: $RUNNER_OS:$OSTYPE" >&2; exit 1 ;;
+          esac
+          export PATH="$PWD/target/debug:$PATH"
+          bash tests/completion-bash.sh
+
+      - name: Smoke-test Windows PowerShell 5.1 completion
+        if: matrix.os == 'windows-latest' && matrix.toolchain == 'stable'
+        shell: powershell
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
+            throw 'Windows PowerShell 5.1 is required'
+          }
+          if (-not (Test-Path -LiteralPath 'target\debug\remove-except.exe' -PathType Leaf)) {
+            throw 'Test binary is missing'
+          }
+          $env:PATH = "$(Join-Path $PWD 'target\debug');$env:PATH"
+          .\tests\completion-powershell.ps1
+
+      - name: Smoke-test PowerShell 7 completion on Windows
+        if: matrix.os == 'windows-latest' && matrix.toolchain == 'stable'
+        shell: pwsh
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 7) { throw 'PowerShell 7 is required' }
+          if (-not (Test-Path -LiteralPath 'target\debug\remove-except.exe' -PathType Leaf)) {
+            throw 'Test binary is missing'
+          }
+          $env:PATH = "$(Join-Path $PWD 'target\debug');$env:PATH"
+          .\tests\completion-powershell.ps1
