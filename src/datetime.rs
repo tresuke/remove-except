@@ -115,7 +115,7 @@ fn parse_boundary(value: &str) -> Result<ParsedBoundary> {
 }
 
 fn resolve_boundary(parsed: ParsedBoundary, zone: Option<&TimeZone>) -> Result<Boundary> {
-    let (timestamp, offset) = if let Some(offset) = parsed.offset {
+    let (timestamp, offset): (Timestamp, Offset) = if let Some(offset) = parsed.offset {
         (
             offset
                 .to_timestamp(parsed.datetime)
@@ -124,7 +124,7 @@ fn resolve_boundary(parsed: ParsedBoundary, zone: Option<&TimeZone>) -> Result<B
         )
     } else {
         let zone = zone.context("Local time zone was not resolved")?;
-        let zoned = zone.to_ambiguous_zoned(parsed.datetime).unambiguous()
+        let zoned = zone.to_ambiguous_zoned_datetime(parsed.datetime).unambiguous()
             .map_err(|error| invalid(format!("Local modification time is ambiguous or nonexistent: {error}; specify an explicit UTC offset")))?;
         (zoned.timestamp(), zoned.offset())
     };
@@ -135,7 +135,11 @@ fn resolve_boundary(parsed: ParsedBoundary, zone: Option<&TimeZone>) -> Result<B
             "Modification time is outside the supported UTC range",
         ));
     }
-    let instant = SystemTime::from(timestamp);
+    let instant = SystemTime::try_from(timestamp).map_err(|error| {
+        invalid(format!(
+            "Modification time cannot be represented exactly on this platform: {error}"
+        ))
+    })?;
     if Timestamp::try_from(instant).ok() != Some(timestamp) {
         return Err(invalid(
             "Modification time cannot be represented exactly on this platform",
@@ -230,5 +234,43 @@ mod tests {
             assert!(resolve(Some(value), None).is_err(), "{value}");
         }
         assert!(resolve(Some("2026-01-01T09:00+09:00"), Some("2026-01-01T00:00Z")).is_err());
+    }
+
+    #[test]
+    fn offsets_are_applied_before_checking_utc_range() {
+        for (value, expected) in [
+            ("1601-01-01T09:00:00+09:00", "1601-01-01T00:00:00Z"),
+            ("9999-01-01T08:59:59+09:00", "9998-12-31T23:59:59Z"),
+        ] {
+            let boundary = resolve_boundary(parse_boundary(value).unwrap(), None).unwrap();
+            assert_eq!(boundary.utc, expected);
+            assert_eq!(
+                Timestamp::try_from(boundary.instant).unwrap().to_string(),
+                expected
+            );
+        }
+        for value in ["1601-01-01T08:59:59+09:00", "9999-01-01T09:00:00+09:00"] {
+            assert!(resolve_boundary(parse_boundary(value).unwrap(), None).is_err());
+        }
+    }
+
+    #[test]
+    fn system_time_preserves_seconds_on_both_sides_of_unix_epoch() {
+        use std::time::Duration;
+
+        for (value, expected) in [
+            (
+                "1969-12-31T23:59:59Z",
+                SystemTime::UNIX_EPOCH - Duration::from_secs(1),
+            ),
+            (
+                "1970-01-01T00:00:01Z",
+                SystemTime::UNIX_EPOCH + Duration::from_secs(1),
+            ),
+        ] {
+            let boundary = resolve_boundary(parse_boundary(value).unwrap(), None).unwrap();
+            assert_eq!(boundary.instant, expected);
+            assert_eq!(boundary.utc, value);
+        }
     }
 }
