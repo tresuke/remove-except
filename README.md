@@ -113,17 +113,17 @@ remove-except --root work --dry-run keep.txt '**/*.md'
 
 | Option | Description |
 | --- | --- |
-| `[KEEP_PATTERN]...` | Paths or glob patterns to keep, combined with OR. Optional when a modification-time or file-size bound is supplied. |
-| `--root <PATH>` | Selects the directory to process. Defaults to the current directory when the command starts. Relative paths are resolved from that directory. |
+| `[KEEP_PATTERN]...` | Paths or glob patterns to keep, combined with OR. Optional when stdin supplies patterns or a modification-time or file-size bound is supplied. |
+| `--root <PATH>` | Selects the processing root. Defaults to the current directory when the command starts. Relative paths are resolved from that directory. |
 | `-n`, `--dry-run` | Displays kept items and deletion targets without deleting anything. |
-| `-f`, `--force` | Deletes without showing the confirmation prompt. Pattern and directory validation still apply. |
+| `-f`, `--force` | Skips the confirmation prompt, not validation or safety guards. |
 | `--patterns-from-stdin` | Reads keep patterns from standard input, one per line. They are combined with positional patterns using OR semantics. |
 | `--require-match` | Rejects deletion when no item directly matches all keep conditions. |
 | `--max-delete-items <N>` | Rejects deletion when more than N deletion items would be removed, including descendants under deletion directories. |
-| `--modified-since <DATE_TIME>` | Inclusive modification-time lower bound. |
-| `--modified-before <DATE_TIME>` | Exclusive modification-time upper bound. |
-| `--size-at-least <BYTES>` | Inclusive logical file-size lower bound in bytes. |
-| `--size-below <BYTES>` | Exclusive logical file-size upper bound in bytes. |
+| `--modified-since <DATE_TIME>` | Modification-time lower bound, inclusive. |
+| `--modified-before <DATE_TIME>` | Modification-time upper bound, exclusive. |
+| `--size-at-least <BYTES>` | Logical file-size lower bound in bytes, inclusive. |
+| `--size-below <BYTES>` | Logical file-size upper bound in bytes, exclusive. |
 | `--format <FORMAT>` | Plan output format: `human` (default) or `json`. |
 | `--pager <MODE>` | Built-in viewer: `auto` (default), `always`, or `never`. `always` conflicts with JSON and `--force`. |
 | `--layout <LAYOUT>` | Output layout: `tree` (default) or `flat`. |
@@ -365,6 +365,8 @@ remove-except --dry-run --summary both keep.txt
 
 When a full path listing is shown, a legend appears after the processing-directory path. With color, Tree legends list directories (blue), symlinks (cyan), and retained parents (green); Flat legends list directories (blue) and symlinks (cyan). Without color, `Markers:` explains `/`, `@`, and `+` for Tree, or `/` and `@` for Flat. On a TTY, `--help` subtly styles headings, Usage, option names, and values; it emits no ANSI styling when color is disabled.
 
+`-h` and `--help` wrap to the detected column width when stdout is a terminal. Widths below 40 columns use 40 columns. Redirected output or an unavailable terminal width uses 80 columns.
+
 `--summary keep|delete|both` replaces selected sections with counts and no paths. Keep counts include required ancestors and separately report direct keep-condition matches. Deletion-item counts and the number of top-level deletion operations are distinct. Since summaries omit paths, review every item with `--dry-run` and without `--summary` before deleting.
 
 On a colored TTY, the summary `KEEP:` heading is bold green and `DELETE:` is bold red. Headings are unstyled when color is disabled.
@@ -422,7 +424,7 @@ With `--patterns-from-stdin`, standard input is read as one pattern per line.
 - NUL-delimited input is not supported. File names containing newlines cannot be passed as patterns.
 - Without a pipe or redirection, you can type patterns in the terminal, one per line. The command writes a note to standard error that it is waiting for input and how to finish. Finish input with Ctrl+D on Ubuntu, or Ctrl+Z followed by Enter on Windows.
 
-Because standard input is used for patterns, the confirmation answer is read from the controlling terminal (the console on Windows, `/dev/tty` on Ubuntu). When no terminal is available, such as in CI or scheduled jobs, nothing is deleted and the command exits with code 3 (failure to start an explicitly requested `--pager always` exits with code 1). In that case, preview with `--dry-run`, or use `--force` after reviewing the plan. Without `--patterns-from-stdin` or an active built-in viewer, the confirmation answer is still read from standard input as before.
+Because standard input is used for patterns, when confirmation is required the answer is read from the controlling terminal (the console on Windows, `/dev/tty` on Ubuntu). If confirmation is required and no terminal is available, such as in CI or scheduled jobs, nothing is deleted and the command exits with code 3 (failure to start an explicitly requested `--pager always` exits with code 1). In that case, preview with `--dry-run`, or use `--force` after reviewing the plan; `--force` skips confirmation. Without `--patterns-from-stdin` or an active built-in viewer, the confirmation answer is still read from standard input as before.
 
 Bash example (keep only files tracked by Git, plus `.git`):
 

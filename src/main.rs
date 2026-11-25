@@ -13,7 +13,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::builder::styling::{AnsiColor, Styles};
-use clap::{CommandFactory, Parser, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
 use completion::CompletionShell;
 use console::style;
 use remove_except::{
@@ -21,11 +21,17 @@ use remove_except::{
     build_plan_with_options,
 };
 use serde::Serialize;
+use unicode_segmentation::UnicodeSegmentation;
 
 const EXIT_RUNTIME_ERROR: u8 = 1;
 const EXIT_INVALID_INPUT: u8 = 2;
 const EXIT_NOT_EXECUTED: u8 = 3;
 const JSON_SCHEMA_VERSION: u32 = 2;
+const HELP_FALLBACK_WIDTH: usize = 80;
+const HELP_MIN_WIDTH: usize = 40;
+const HELP_ABOUT: &str = "Keep selected items and remove the rest under the processing root";
+const HELP_FIRST_USE: &str =
+    "First use --dry-run without --summary to review all kept items and deletion targets.";
 
 const HELP_STYLES: Styles = Styles::styled()
     .header(AnsiColor::Cyan.on_default().bold())
@@ -33,41 +39,242 @@ const HELP_STYLES: Styles = Styles::styled()
     .literal(AnsiColor::Green.on_default().bold())
     .placeholder(AnsiColor::Yellow.on_default());
 
+fn help_width(stdout_is_terminal: bool, terminal_width: Option<u16>) -> usize {
+    if stdout_is_terminal {
+        terminal_width
+            .filter(|&width| width > 0)
+            .map(usize::from)
+            .unwrap_or(HELP_FALLBACK_WIDTH)
+            .max(HELP_MIN_WIDTH)
+    } else {
+        HELP_FALLBACK_WIDTH
+    }
+}
+
+fn detected_help_width() -> usize {
+    let stdout_is_terminal = io::stdout().is_terminal();
+    let terminal_width = if stdout_is_terminal {
+        console::Term::stdout()
+            .size_checked()
+            .map(|(_, width)| width)
+    } else {
+        None
+    };
+    help_width(stdout_is_terminal, terminal_width)
+}
+
+fn invoked_binary_name() -> String {
+    std::env::args_os()
+        .next()
+        .and_then(|argument| {
+            Path::new(&argument)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| Args::command().get_name().to_owned())
+}
+
+fn wrap_help_text(text: &str, width: usize) -> String {
+    let mut wrapped = String::new();
+    for (paragraph_index, paragraph) in text.split("\n\n").enumerate() {
+        if paragraph_index > 0 {
+            wrapped.push_str("\n\n");
+        }
+
+        let mut line = String::new();
+        for word in paragraph.split_whitespace() {
+            let candidate = if line.is_empty() {
+                word.to_owned()
+            } else {
+                format!("{line} {word}")
+            };
+            if !line.is_empty() && console::measure_text_width(&candidate) > width {
+                wrapped.push_str(&line);
+                wrapped.push('\n');
+                line.clear();
+                line.push_str(word);
+            } else {
+                line = candidate;
+            }
+        }
+        wrapped.push_str(&line);
+    }
+    wrapped
+}
+
+fn help_command(width: usize, bin_name: &str) -> clap::Command {
+    let long_about = format!("{HELP_ABOUT}\n\n{HELP_FIRST_USE}");
+    let name = bin_name.to_owned();
+    let mut command = Args::command().bin_name(name.clone());
+    command = command
+        .term_width(width)
+        .about(wrap_help_text(HELP_ABOUT, width))
+        .long_about(wrap_help_text(&long_about, width))
+        .after_help(wrap_help_text(HELP_FIRST_USE, width));
+    if let Some(usage) = usage_override(&name, width) {
+        command = command.override_usage(usage);
+    }
+    command
+}
+
+fn usage_override(name: &str, width: usize) -> Option<String> {
+    let full_usage = format!("Usage: {name} [OPTIONS] [KEEP_PATTERN]...");
+    if console::measure_text_width(&full_usage) <= width {
+        return None;
+    }
+
+    let options_usage = format!("Usage: {name} [OPTIONS]");
+    if console::measure_text_width(&options_usage) <= width {
+        return Some(format!("{name} [OPTIONS]\n  [KEEP_PATTERN]..."));
+    }
+
+    let name_usage = format!("Usage: {name}");
+    if console::measure_text_width(&name_usage) <= width {
+        return Some(format!("{name}\n  [OPTIONS] [KEEP_PATTERN]..."));
+    }
+
+    let name_lines = wrap_usage_name(name, width.saturating_sub(2));
+    Some(format!(
+        "\n  {}\n  [OPTIONS] [KEEP_PATTERN]...",
+        name_lines.join("\n  ")
+    ))
+}
+
+fn wrap_usage_name(name: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let mut line_width = 0_usize;
+
+    for grapheme in name.graphemes(true) {
+        let grapheme_width = console::measure_text_width(grapheme);
+        if !line.is_empty() && line_width.saturating_add(grapheme_width) > width {
+            lines.push(std::mem::take(&mut line));
+            line_width = 0;
+        }
+        line.push_str(grapheme);
+        line_width += grapheme_width;
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+fn long_help_details() -> clap::builder::StyledStr {
+    let heading = HELP_STYLES.get_header();
+    let warning = HELP_STYLES.get_placeholder();
+    format!(
+        "{heading}Keep conditions:{heading:#}\n\
+  At least one pattern, modification-time bound, or file-size bound \
+  is required. Patterns use OR; each active time or size range uses \
+  AND with the other conditions. Kept items include direct matches \
+  and their required ancestors.\n\n\
+  With a time or size filter, only regular files directly match; \
+  links and empty directories may be deleted.\n\
+  {warning}WARNING:{warning:#} If nothing directly matches, everything under \
+  the processing root becomes a deletion target.\n\n\
+  The normalized processing root and scanned entry paths must be \
+  representable as Unicode. Otherwise, nothing is printed to stdout \
+  or deleted (exit code 1), even with --force.\n\n\
+{heading}Safety guards:{heading:#}\n\
+  Both guards may be used together. --force cannot bypass either. \
+  A violation in a normal or force run is reported on stderr and \
+  exits 3 before human preview, viewing, confirmation, or deletion. \
+  JSON still emits the pre-deletion plan and guard information. \
+  A dry-run violation does not itself change the exit code: \
+  display or viewer completion exits 0, cancellation exits 3, and \
+  viewer startup or terminal errors exit 1. Dry-run never deletes.\n\n\
+{heading}Output details:{heading:#}\n  - Tree: directories are blue, symlinks cyan, and kept parent \
+    directories in the delete tree green when color is enabled. \
+    Without color, directories end with /, symlinks with @, and \
+    kept parents with +.\n  - Flat: ItemType identifies each entry. Without color, directories \
+    end with / and symlinks with @. Flat has no kept-parent marker.\n  - Status: NO REMOVALS (green) means no deletion operations; \
+    otherwise PREVIEW ONLY (cyan) means dry-run, CONFIRM TO DELETE \
+    (yellow) means confirmation is required, and FORCE DELETE (red) \
+    means --force. Color is automatic when the terminal supports it.\n\n\
+{heading}Viewer and confirmation:{heading:#}\n  - Up/Down scroll; PageUp/PageDown page; Home/End move to the \
+    beginning/end; Tab/Shift+Tab switch sections. Long paths wrap \
+    without truncation.\n  - c finishes viewing; q/Esc/Ctrl+C cancel (code 3). Enter and y \
+    never approve deletion in the viewer.\n  - Pending viewer input is discarded before a separate whole-line \
+    terminal confirmation. Only newline-terminated y/yes confirms \
+    (case-insensitive, surrounding whitespace ignored); anything \
+    else, including EOF, cancels.\n  - Auto explains unavailable-terminal fallback on stderr; always \
+    fails with code 1. Terminal errors after startup stop without \
+    deletion. Human final confirmation repeats the processing root, \
+    counts, and applicable warnings on stderr.\n\n\
+{heading}Example:{heading:#}\n\
+  remove-except --dry-run keep.txt\n\
+  Review all kept items and deletion targets before deleting.\n\n\
+{heading}Exit codes:{heading:#}\n\
+  0  Plan shown or deletion completed.\n\
+  1  Runtime error, including viewer errors.\n\
+  2  Invalid arguments, input, root, patterns, times, or sizes.\n\
+  3  Viewing cancelled, confirmation declined or unavailable, or \
+     normal/force deletion rejected by a safety guard.\n\
+  For a dry-run guard violation, successful display or viewer \
+  completion exits 0, cancellation exits 3, and viewer errors exit 1."
+    )
+    .into()
+}
+
 #[derive(Debug, Parser)]
 #[command(
     version,
-    about = "Keep matching items and remove the rest under a processing root",
-    long_about = "Keep items matching any supplied path or glob pattern and all specified modification-time and file-size bounds, then remove the rest under the selected root. Multiple patterns are combined with OR; each time or size range is combined with the other conditions using AND. When a time or size filter is active, only matching regular files and their ancestors are kept. Always review the plan before deleting items. The normalized root and scanned entry paths must be representable as Unicode. Otherwise, nothing is printed to stdout or deleted (exit code 1), even with --force.",
-    after_long_help = "Output:\n  Tree: directories end with / and symlinks with @. With color, directories are blue, symlinks cyan, and kept parent directories in the delete tree green. Without color, kept parents end with +.\n  Flat: ItemType identifies each entry. Without color, directory and symlink paths end with / and @. Flat output has no kept-parent marker.\n  Status labels: NO REMOVALS (green) when there are no deletion operations; otherwise PREVIEW ONLY (cyan) for dry runs, CONFIRM TO DELETE (yellow) when confirmation is required, FORCE DELETE (red) with --force.\n  Colors are used automatically when output is a terminal and color is available.\n\nViewer:\n  --pager auto (default) pages long human output on supported terminals in normal and dry runs. JSON and --force bypass it. --pager always conflicts with JSON and --force; --pager never uses normal output.\n  Up/Down scroll, PageUp/PageDown page, Home/End move to the beginning/end, Tab/Shift+Tab switch sections. Long paths wrap without truncation. c finishes viewing; q/Esc/Ctrl+C cancel (code 3). Enter and y never approve deletion in the viewer.\n  Pending viewer input is discarded before a separate whole-line terminal confirmation. Only a newline-terminated y/yes confirms (case-insensitive, surrounding whitespace ignored); anything else or EOF cancels.\n  Auto explains unavailable-terminal fallback on stderr; always fails with code 1. Terminal errors after startup stop without deletion. Human final confirmation repeats root, counts, and applicable warnings on stderr.\n\nModification times:\n  --modified-since is inclusive and --modified-before is exclusive; either may be used alone. Accept YYYY-MM-DD, YYYY-MM-DDTHH:MM[:SS], or YYYY-MM-DD HH:MM[:SS]. Date-times may include Z or +/-HH:MM. Date-only and offset-free date-times use local time. Fractional seconds and ambiguous local times are rejected. Only matching regular files and their ancestors are kept; links and empty directories may be deleted.\n\nFile sizes:\n  --size-at-least is inclusive and --size-below is exclusive. Values are ASCII decimal byte counts in the u64 range; leading zeroes are allowed, but signs, whitespace, and unit suffixes are not. File sizes use logical lengths from metadata. --size-below 0 is invalid; --size-at-least 0 includes empty files. Only regular files can directly match a size filter.\n\nPipelines:\n  --patterns-from-stdin reads one UTF-8 pattern per line (LF or CRLF). A leading BOM is removed, empty lines are ignored, other whitespace is kept, and # has no special meaning. Invalid UTF-8 or NUL characters (for example, UTF-16 input) are rejected. Confirmation is then read from the terminal; without one, nothing is deleted.\n\nSafety guards:\n  --require-match rejects deletion when direct keep matches are 0, including runs with no deletion targets. --max-delete-items <N> rejects deletion when delete_items contains more than N items; directory descendants count. Both may be used together. On violation, normal and force runs report the rejection on stderr and exit 3 before human preview, viewing, confirmation, or deletion. JSON still emits the pre-deletion plan and guard information. A dry-run violation does not itself change the exit code: normal output or viewer completion exits 0, viewer cancellation exits 3, and viewer startup or terminal errors exit 1. Dry-run never deletes. --force cannot bypass either guard.\n\nJSON:\n  --format json writes exactly one JSON object (schema_version 2) with root, direct_match_count, guards, guard_violations, selection, keep_items, delete_items, and delete_roots to stdout. Messages and prompts go to stderr. New fields may be added without changing schema_version.\n\nExit codes:\n  0 plan shown or deletion completed; 1 runtime error (including viewer errors); 2 invalid arguments, input, root, patterns, modification times, or file sizes; 3 nothing deleted because viewing was cancelled or confirmation was declined or unavailable, or normal/force deletion was rejected by a safety guard. For a dry-run guard violation, normal display or viewer completion exits 0, viewer cancellation exits 3, and viewer errors exit 1.",
-    styles = HELP_STYLES
+    about = "Keep selected items and remove the rest under the processing root",
+    after_help = "First use --dry-run without --summary to review all kept items and deletion targets.",
+    long_about = "Keep selected items and remove the rest under the processing root.\n\nFirst use --dry-run without --summary to review all kept items and deletion targets.",
+    after_long_help = long_help_details(),
+    styles = HELP_STYLES,
+    next_line_help = true
 )]
 struct Args {
     #[arg(
         long,
         value_name = "PATH",
-        help = "Directory to process (defaults to the current directory)"
+        help_heading = "Selection",
+        help = "Processing root (default: current directory at startup)"
     )]
     root: Option<PathBuf>,
 
     #[arg(
         short = 'n',
         long,
-        help = "Preview the deletion plan without confirming or deleting anything"
+        help_heading = "Execution and safety",
+        help = "Show the plan without confirmation or deletion"
     )]
     dry_run: bool,
 
-    #[arg(short = 'f', long, help = "Delete without the confirmation prompt")]
+    #[arg(
+        short = 'f',
+        long,
+        help_heading = "Execution and safety",
+        help = "Skip the confirmation prompt, not validation or safety guards",
+        long_help = "Skip the confirmation prompt, not validation or safety guards."
+    )]
     force: bool,
 
     #[arg(
         long,
-        help = "Also read keep patterns from standard input, one per line"
+        help_heading = "Selection",
+        help = "Also read keep patterns from standard input, one per line",
+        long_help = concat!(
+            "Also read keep patterns from standard input, one UTF-8 ",
+            "pattern per line (LF or CRLF). A leading BOM is removed, ",
+            "empty lines are ignored, other whitespace is kept, and # ",
+            "has no special meaning. Invalid UTF-8 or NUL characters ",
+            "(for example, UTF-16 input) are rejected. When confirmation ",
+            "is required, read it from the controlling terminal; without ",
+            "one, nothing is deleted. --force skips confirmation."
+        )
     )]
     patterns_from_stdin: bool,
 
     #[arg(
         long,
-        help = "Reject deletion unless at least one item directly matches all keep conditions"
+        help_heading = "Execution and safety",
+        help = "Reject deletion unless at least one item directly matches all keep conditions",
+        long_help = "Reject deletion when the direct keep-match count is zero, including when there are no deletion targets."
     )]
     require_match: bool,
 
@@ -76,21 +283,33 @@ struct Args {
         value_name = "N",
         value_parser = parse_delete_item_limit,
         action = clap::ArgAction::Append,
-        help = "Reject deletion when more than N items, including descendants, would be deleted"
+        help_heading = "Execution and safety",
+        help = "Reject deletion when more than N items, including descendants, would be deleted",
+        long_help = "Reject deletion when delete_items contains more than N items; directory descendants count."
     )]
     max_delete_items: Vec<u64>,
 
     #[arg(
         long,
         value_name = "DATE_TIME",
-        help = "Keep regular files modified at or after this time"
+        help_heading = "Selection",
+        help = "Modification-time lower bound, inclusive",
+        long_help = concat!(
+            "Modification-time lower bound, inclusive. Either time ",
+            "bound may be used alone. Accept YYYY-MM-DD, ",
+            "YYYY-MM-DDTHH:MM[:SS], or YYYY-MM-DD HH:MM[:SS]. ",
+            "Date-times may include Z or +/-HH:MM. Date-only and ",
+            "offset-free date-times use local time. Fractional seconds ",
+            "and ambiguous local times are rejected."
+        )
     )]
     modified_since: Option<String>,
 
     #[arg(
         long,
         value_name = "DATE_TIME",
-        help = "Keep regular files modified before this time"
+        help_heading = "Selection",
+        help = "Modification-time upper bound, exclusive"
     )]
     modified_before: Option<String>,
 
@@ -98,7 +317,16 @@ struct Args {
         long,
         value_name = "BYTES",
         value_parser = parse_size_bound,
-        help = "Keep regular files with a logical size at or above this byte count. If both bounds are specified, --size-at-least must be less than --size-below."
+        help_heading = "Selection",
+        help = "Logical file-size lower bound in bytes, inclusive",
+        long_help = concat!(
+            "Logical file-size lower bound in bytes from metadata, ",
+            "inclusive; 0 includes empty files. Either size bound may ",
+            "be used alone. If both are specified, the lower bound must ",
+            "be less than the upper bound. Values are ASCII decimal ",
+            "byte counts in the u64 range; leading zeroes are allowed, ",
+            "but signs, whitespace, and unit suffixes are not."
+        )
     )]
     size_at_least: Option<u64>,
 
@@ -106,7 +334,9 @@ struct Args {
         long,
         value_name = "BYTES",
         value_parser = parse_size_bound,
-        help = "Keep regular files with a logical size below this byte count"
+        help_heading = "Selection",
+        help = "Logical file-size upper bound in bytes, exclusive",
+        long_help = "Logical file-size upper bound in bytes, exclusive; 0 is invalid."
     )]
     size_below: Option<u64>,
 
@@ -115,7 +345,16 @@ struct Args {
         value_enum,
         value_name = "FORMAT",
         default_value = "human",
-        help = "Plan output format: human or json"
+        help_heading = "Output",
+        help = "Plan output format: human or json",
+        long_help = concat!(
+            "Plan output format: human or json. JSON writes exactly ",
+            "one pre-deletion object (schema_version 2) with root, ",
+            "direct_match_count, guards, guard_violations, selection, ",
+            "keep_items, delete_items, and delete_roots to stdout. ",
+            "Messages and prompts go to stderr. New fields may be added ",
+            "without changing schema_version."
+        )
     )]
     format: OutputFormat,
 
@@ -124,7 +363,14 @@ struct Args {
         value_enum,
         value_name = "MODE",
         default_value = "auto",
-        help = "Built-in viewer: auto for long terminal output, always (conflicts with JSON/force), or never"
+        help_heading = "Output",
+        help = "Built-in viewer: auto for long terminal output; always conflicts with JSON/force; or never",
+        long_help = concat!(
+            "Built-in viewer: auto pages long human output on supported ",
+            "terminals in normal and dry runs; JSON and --force bypass ",
+            "it. always conflicts with JSON and --force; never uses ",
+            "normal output."
+        )
     )]
     pager: PagerMode,
 
@@ -132,7 +378,8 @@ struct Args {
         long,
         value_enum,
         value_name = "SECTION",
-        help = "Summarize paths in SECTION: keep, delete, or both"
+        help_heading = "Output",
+        help = "Show counts instead of paths for keep, delete, or both"
     )]
     summary: Option<SummarySection>,
 
@@ -140,13 +387,16 @@ struct Args {
         long,
         value_enum,
         value_name = "LAYOUT",
+        help_heading = "Output",
         help = "Display paths as a tree or a flat list [default: tree]"
     )]
     layout: Option<Layout>,
 
     #[arg(
         long,
-        help = "Sort flat output by item type, then relative path (requires --layout flat)"
+        help_heading = "Output",
+        help = "Sort flat output by item type, then relative path (requires --layout flat)",
+        long_help = "Sort flat output by item type, then relative path (requires --layout flat)."
     )]
     sort_by_type: bool,
 
@@ -155,8 +405,15 @@ struct Args {
         value_enum,
         value_name = "SHELL",
         exclusive = true,
+        help_heading = "Shell completion",
         help = "Print a shell completion script to stdout without planning or deleting (use alone)",
-        long_help = "Print a static shell completion script to stdout without reading stdin, planning, or deleting. Do not combine with execution arguments. An empty trailing -- is allowed. Help and version options take precedence as usual. Exit codes: 0 on success, 1 on output failure, 2 on invalid arguments."
+        long_help = concat!(
+            "Print a static shell completion script to stdout without ",
+            "reading stdin, planning, or deleting. Do not combine with ",
+            "execution arguments. An empty trailing -- is allowed. Help ",
+            "and version options take precedence as usual. Exit codes: ",
+            "0 on success, 1 on output failure, 2 on invalid arguments."
+        )
     )]
     generate_completion: Option<CompletionShell>,
 
@@ -171,7 +428,20 @@ struct Args {
         ],
         num_args = 0..,
         value_name = "KEEP_PATTERN",
-        help = "Paths or glob patterns to keep (* matches one level, ? one Unicode scalar, ** recurses); any match keeps an item"
+        help = concat!(
+            "Paths or glob patterns to keep (* matches one level, ",
+            "? one Unicode scalar, ** recurses). Direct matches meet ",
+            "all active time and size conditions and at least one ",
+            "pattern if supplied. With time or size filters, only ",
+            "regular files directly match; links and empty directories ",
+            "may be deleted. Required ancestors are kept."
+        ),
+        long_help = concat!(
+            "Paths or glob patterns to keep: * matches one level, ",
+            "? one Unicode scalar, and ** recurses. When patterns are ",
+            "supplied, direct matches must match at least one pattern ",
+            "and all other active keep conditions."
+        )
     )]
     patterns: Vec<String>,
 }
@@ -299,7 +569,9 @@ fn resolve_selection(args: &Args) -> Result<Selection> {
 }
 
 fn main() -> ExitCode {
-    let args = Args::parse();
+    let binary_name = invoked_binary_name();
+    let matches = help_command(detected_help_width(), &binary_name).get_matches();
+    let args = Args::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
     if let Some(shell) = args.generate_completion {
         return match completion::write_script(shell, Args::command(), &mut io::stdout().lock()) {
             Ok(()) => ExitCode::SUCCESS,
@@ -1486,7 +1758,7 @@ mod tests {
         read_patterns, render_plan, run_with_plan_builder, style_flat_item, tree_item_suffix,
     };
     use assert_fs::prelude::*;
-    use clap::{CommandFactory, Parser};
+    use clap::Parser;
     use remove_except::{ItemType, build_plan, build_plan_with_options};
 
     static COLOR_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -2013,12 +2285,183 @@ mod tests {
 
     #[test]
     fn help_styles_can_be_forced_for_tty_rendering() {
-        let mut command = Args::command().color(clap::ColorChoice::Always);
+        let package_name = env!("CARGO_PKG_NAME");
+        let mut command = super::help_command(80, package_name).color(clap::ColorChoice::Always);
         let help = command.render_long_help().ansi().to_string();
-
-        assert!(help.contains("\u{1b}["));
-        assert!(help.contains("Usage:"));
+        let heading = super::HELP_STYLES.get_header();
+        let warning = super::HELP_STYLES.get_placeholder();
+        assert!(help.contains(&format!("{heading}Keep conditions:{heading:#}")));
+        assert!(help.contains(&format!("{heading}Exit codes:{heading:#}")));
+        assert!(help.contains(&format!("{warning}WARNING:{warning:#}")));
         assert!(help.contains("--dry-run"));
-        assert!(help.contains("NO REMOVALS (green) when there are no deletion operations"));
+        let short = super::help_command(80, package_name)
+            .color(clap::ColorChoice::Always)
+            .render_help()
+            .ansi()
+            .to_string();
+        assert!(short.contains(&format!("{heading}Arguments:{heading:#}")));
+        assert!(short.contains(&format!("{warning}[KEEP_PATTERN]...{warning:#}")));
+        let plain = super::help_command(80, package_name)
+            .color(clap::ColorChoice::Never)
+            .render_long_help()
+            .to_string();
+        assert!(!plain.contains('\u{1b}'));
+        assert!(plain.contains("WARNING:"));
+    }
+
+    #[test]
+    fn help_width_uses_terminal_columns_with_a_fallback_and_minimum() {
+        assert_eq!(super::help_width(true, Some(0)), 80);
+        assert_eq!(super::help_width(true, Some(20)), 40);
+        assert_eq!(super::help_width(true, Some(40)), 40);
+        assert_eq!(super::help_width(true, Some(79)), 79);
+        assert_eq!(super::help_width(true, Some(80)), 80);
+        assert_eq!(super::help_width(true, Some(120)), 120);
+        assert_eq!(super::help_width(true, None), 80);
+        assert_eq!(super::help_width(false, Some(40)), 80);
+        assert_eq!(super::help_width(false, None), 80);
+    }
+
+    #[test]
+    fn help_usage_respects_width_with_a_windows_binary_name() {
+        for width in 47..=53 {
+            for rendered in [
+                super::help_command(width, "remove-except.exe")
+                    .color(clap::ColorChoice::Never)
+                    .render_help()
+                    .to_string(),
+                super::help_command(width, "remove-except.exe")
+                    .color(clap::ColorChoice::Never)
+                    .render_long_help()
+                    .to_string(),
+            ] {
+                assert!(rendered.contains("Usage: remove-except.exe"));
+                let help = console::strip_ansi_codes(&rendered);
+                for line in help.lines() {
+                    let display_width = console::measure_text_width(line);
+                    assert!(
+                        display_width <= width,
+                        "width {width}, display width {display_width}: {line}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn help_usage_wraps_long_binary_names_within_the_width() {
+        let names = [
+            "abcdefghijklmnopqrstuvwx",
+            "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwx",
+        ];
+        for name in names {
+            for width in 40..=53 {
+                for rendered in [
+                    super::help_command(width, name)
+                        .color(clap::ColorChoice::Never)
+                        .render_help()
+                        .to_string(),
+                    super::help_command(width, name)
+                        .color(clap::ColorChoice::Never)
+                        .render_long_help()
+                        .to_string(),
+                ] {
+                    let help = console::strip_ansi_codes(&rendered);
+                    assert!(help.contains("Usage:"), "{help}");
+                    for line in help.lines() {
+                        let display_width = console::measure_text_width(line);
+                        assert!(
+                            display_width <= width,
+                            "name {name:?}, width {width}, display width {display_width}: {line}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn usage_name_wrapping_preserves_graphemes_and_characters() {
+        let name = format!("{}e\u{301}{}", "a".repeat(38), "b".repeat(20));
+        let lines = super::wrap_usage_name(&name, 38);
+        assert_eq!(lines.concat(), name);
+        assert!(lines[0].ends_with(&"a".repeat(38)));
+        assert!(lines[1].starts_with("e\u{301}"));
+        assert!(
+            lines
+                .iter()
+                .all(|line| console::measure_text_width(line) <= 38)
+        );
+    }
+
+    #[test]
+    fn long_help_is_readable_at_representative_widths() {
+        for width in [40, 80, 120] {
+            let rendered = super::help_command(width, env!("CARGO_PKG_NAME"))
+                .color(clap::ColorChoice::Never)
+                .render_long_help()
+                .to_string();
+            let help = console::strip_ansi_codes(&rendered);
+            for line in help.lines() {
+                let display_width = console::measure_text_width(line);
+                assert!(
+                    display_width <= width,
+                    "width {width}, display width {display_width}: {line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn short_help_is_readable_at_representative_widths() {
+        for width in [40, 80, 120] {
+            let rendered = super::help_command(width, env!("CARGO_PKG_NAME"))
+                .color(clap::ColorChoice::Never)
+                .render_help()
+                .to_string();
+            assert!(!rendered.contains('\u{1b}'));
+            let help = console::strip_ansi_codes(&rendered);
+            for line in help.lines() {
+                let display_width = console::measure_text_width(line);
+                assert!(
+                    display_width <= width,
+                    "width {width}, display width {display_width}: {line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn help_reflows_soft_line_breaks_at_wider_widths() {
+        let short_help = |width| {
+            super::help_command(width, env!("CARGO_PKG_NAME"))
+                .color(clap::ColorChoice::Never)
+                .render_help()
+                .to_string()
+        };
+        let long_help = |width| {
+            super::help_command(width, env!("CARGO_PKG_NAME"))
+                .color(clap::ColorChoice::Never)
+                .render_long_help()
+                .to_string()
+        };
+        let section_line_count = |text: &str, start: &str, end: &str| {
+            let section = text.split_once(start).unwrap().1.split_once(end).unwrap().0;
+            section.lines().count()
+        };
+
+        let short_80 = short_help(80);
+        let short_120 = short_help(120);
+        assert!(
+            section_line_count(&short_120, "Arguments:", "Options:")
+                < section_line_count(&short_80, "Arguments:", "Options:")
+        );
+
+        let long_80 = long_help(80);
+        let long_120 = long_help(120);
+        assert!(
+            section_line_count(&long_120, "--patterns-from-stdin", "--modified-since")
+                < section_line_count(&long_80, "--patterns-from-stdin", "--modified-since")
+        );
     }
 }

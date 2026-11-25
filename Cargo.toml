@@ -27,7 +27,7 @@ rustdoc-args = ["--generate-link-to-definition"]
 
 [dependencies]
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "wrap_help"] }
 clap_complete = "4.6"
 console = "0.16"
 globset = "0.4"
