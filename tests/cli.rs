@@ -1743,10 +1743,11 @@ fn help_documents_layout_and_summary_options() {
     assert!(output.contains("[default: tree]"));
     assert!(output.contains("--summary <SECTION>"));
     assert!(output.contains("keep, delete, or both"));
-    assert!(output.contains("Output:"));
-    assert!(output.contains("kept parent directories in the delete tree green"));
-    assert!(output.contains("Flat output has no kept-parent marker"));
-    assert!(output.contains("PREVIEW ONLY (cyan)"));
+    let normalized = output.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(output.contains("Output details:"));
+    assert!(normalized.contains("kept parent directories in the delete tree green"));
+    assert!(normalized.contains("Flat has no kept-parent marker"));
+    assert!(normalized.contains("PREVIEW ONLY (cyan)"));
     assert!(!output.contains('\u{1b}'));
 }
 
@@ -3099,6 +3100,7 @@ fn help_documents_pipeline_options_and_exit_codes() {
         .stdout
         .clone();
     let output = String::from_utf8_lossy(&output);
+    let normalized = output.split_whitespace().collect::<Vec<_>>().join(" ");
 
     assert!(output.contains("--patterns-from-stdin"));
     assert!(output.contains("--size-at-least <BYTES>"));
@@ -3109,17 +3111,216 @@ fn help_documents_pipeline_options_and_exit_codes() {
     assert!(output.contains("guard_violations"));
     assert!(output.contains("--format <FORMAT>"));
     assert!(output.contains("schema_version 2"));
-    assert!(output.contains("ASCII decimal byte counts in the u64 range"));
+    assert!(normalized.contains("ASCII decimal byte counts in the u64 range"));
     assert!(output.contains("Exit codes:"));
     assert!(output.contains("A dry-run violation does not itself change the exit code"));
-    assert!(output.contains("viewer cancellation exits 3"));
-    assert!(output.contains("viewer startup or terminal errors exit 1"));
-    let confirmation_line = output
-        .lines()
-        .find(|line| line.contains("Pending viewer input"))
-        .unwrap();
-    assert!(confirmation_line.starts_with("  Pending viewer input"));
-    assert!(confirmation_line.contains("newline-terminated y/yes"));
+    assert!(normalized.contains("cancellation exits 3"));
+    assert!(normalized.contains("viewer startup or terminal errors exit 1"));
+    assert!(normalized.contains("Pending viewer input is discarded"));
+    assert!(normalized.contains("Only newline-terminated y/yes confirms"));
+    for code in [
+        "0 Plan shown or deletion completed",
+        "1 Runtime error",
+        "2 Invalid arguments",
+        "3 Viewing cancelled",
+    ] {
+        assert!(normalized.contains(code), "{code}");
+    }
+}
+
+#[test]
+fn long_help_places_details_with_options_and_has_no_redirected_color() {
+    let output = Command::cargo_bin("remove-except")
+        .unwrap()
+        .arg("--help")
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(!output.contains(&0x1b));
+    let help = String::from_utf8(output).unwrap();
+    let arguments = help
+        .split_once("Arguments:")
+        .unwrap()
+        .1
+        .split_once("Options:")
+        .unwrap()
+        .0
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(arguments.contains(
+        "When patterns are supplied, direct matches must match at least one pattern and all other active keep conditions."
+    ));
+    assert!(!arguments.contains("Any match keeps an item."));
+    let stdin_details = help
+        .split_once("--patterns-from-stdin")
+        .unwrap()
+        .1
+        .split_once("--modified-since")
+        .unwrap()
+        .0
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(stdin_details.contains(
+        "When confirmation is required, read it from the controlling terminal; without one, nothing is deleted. --force skips confirmation."
+    ));
+    for (option, next, detail) in [
+        ("--patterns-from-stdin", "--modified-since", "UTF-8"),
+        (
+            "--modified-since",
+            "--modified-before",
+            "YYYY-MM-DDTHH:MM[:SS]",
+        ),
+        ("--size-at-least", "--size-below", "ASCII decimal"),
+        (
+            "--require-match",
+            "--max-delete-items",
+            "direct keep-match count",
+        ),
+        ("--format", "--pager", "schema_version 2"),
+    ] {
+        let start = help.find(option).unwrap();
+        let end = start + help[start..].find(next).unwrap();
+        assert!(help[start..end].contains(detail), "{detail}");
+    }
+}
+
+#[test]
+fn redirected_help_uses_fallback_width_without_color() {
+    for flag in ["-h", "--help"] {
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .arg(flag)
+            .env("NO_COLOR", "1")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        assert!(!output.contains(&0x1b));
+
+        let rendered = String::from_utf8(output).unwrap();
+        let help = console::strip_ansi_codes(&rendered);
+        let widest_line = help
+            .lines()
+            .map(console::measure_text_width)
+            .max()
+            .unwrap_or(0);
+        assert!(
+            (41..=80).contains(&widest_line),
+            "{flag} did not use the redirected 80-column fallback: {widest_line}"
+        );
+    }
+}
+
+#[test]
+fn help_usage_uses_the_invoked_binary_name() {
+    let binary_name = std::path::Path::new(env!("CARGO_BIN_EXE_remove-except"))
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+
+    for flag in ["-h", "--help"] {
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .arg(flag)
+            .env("NO_COLOR", "1")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let help = String::from_utf8(output).unwrap();
+        assert!(
+            help.lines()
+                .any(|line| line.starts_with(&format!("Usage: {binary_name} "))),
+            "{flag} did not use the invoked binary name {binary_name:?}:\n{help}"
+        );
+    }
+}
+
+#[test]
+fn help_groups_options_and_preserves_safety_guidance() {
+    for flag in ["-h", "--help"] {
+        let output = Command::cargo_bin("remove-except")
+            .unwrap()
+            .arg(flag)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let help = String::from_utf8(output).unwrap();
+        let normalized = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(help.contains("processing root"));
+        assert!(help.contains("--dry-run without --summary"));
+        let headings = [
+            "Selection:",
+            "Execution and safety:",
+            "Output:",
+            "Shell completion:",
+        ];
+        let positions: Vec<_> = headings
+            .iter()
+            .map(|heading| help.find(heading).unwrap())
+            .collect();
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        if flag == "--help" {
+            for detail in [
+                "Keep conditions:",
+                "direct matches and their required ancestors",
+                "everything under the processing root becomes a deletion target",
+                "only regular files directly match",
+                "Safety guards:",
+                "before human preview, viewing, confirmation, or deletion",
+                "--force cannot bypass either",
+                "Enter and y never approve deletion in the viewer",
+                "nothing is printed to stdout or deleted (exit code 1)",
+                "remove-except --dry-run keep.txt",
+                "Only newline-terminated y/yes confirms",
+                "including when there are no deletion targets",
+                "directory descendants count",
+                "When confirmation is required, read it from the controlling terminal; without one, nothing is deleted",
+            ] {
+                assert!(normalized.contains(detail), "missing help detail: {detail}");
+            }
+            assert!(!help.contains('\u{1b}'));
+        } else {
+            let arguments = help
+                .split_once("Arguments:")
+                .unwrap()
+                .1
+                .split_once("Options:")
+                .unwrap()
+                .0
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(arguments.contains("* matches one level, ? one Unicode scalar, ** recurses"));
+            assert!(arguments.contains(
+                "Direct matches meet all active time and size conditions and at least one pattern if supplied"
+            ));
+            assert!(arguments.contains(
+                "With time or size filters, only regular files directly match; links and empty directories may be deleted. Required ancestors are kept."
+            ));
+            assert!(!arguments.contains("any match keeps an item"));
+            assert!(!arguments.contains("direct matches require any pattern"));
+            assert!(!help.contains('\u{1b}'));
+            for line in help.lines() {
+                assert!(
+                    line.chars().count() <= 80,
+                    "short help line too long: {line}"
+                );
+            }
+            assert!(help.contains("Skip the confirmation prompt, not validation or safety guards"));
+            assert!(!help.contains("Keep conditions:"));
+        }
+    }
 }
 
 #[test]
@@ -3133,10 +3334,11 @@ fn help_documents_modification_time_formats() {
         .stdout
         .clone();
     let output = String::from_utf8_lossy(&output);
+    let normalized = output.split_whitespace().collect::<Vec<_>>().join(" ");
 
-    assert!(output.contains("YYYY-MM-DDTHH:MM[:SS]"));
-    assert!(output.contains("YYYY-MM-DD HH:MM[:SS]"));
-    assert!(output.contains("Date-times may include Z or +/-HH:MM"));
+    assert!(normalized.contains("YYYY-MM-DDTHH:MM[:SS]"));
+    assert!(normalized.contains("YYYY-MM-DD HH:MM[:SS]"));
+    assert!(normalized.contains("Date-times may include Z or +/-HH:MM"));
 }
 
 #[test]

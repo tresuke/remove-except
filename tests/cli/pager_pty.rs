@@ -339,6 +339,52 @@ fn fixture() -> assert_fs::TempDir {
 }
 
 #[test]
+fn pty_help_wraps_to_detected_terminal_width() {
+    let root = fixture();
+    for help_arg in ["-h", "--help"] {
+        let mut output_by_width = Vec::new();
+        for columns in [40, 80, 120] {
+            let mut session =
+                Session::start_with_size(root.path(), &[help_arg], false, 24, columns);
+            session.exit_and_drain(0);
+            let output = console::strip_ansi_codes(&session.output).into_owned();
+            let widest_line = output
+                .lines()
+                .map(|line| console::measure_text_width(line.trim_end_matches('\r')))
+                .max()
+                .unwrap_or(0);
+            assert!(
+                widest_line <= usize::from(columns),
+                "{help_arg} exceeded {columns} columns:\n{output}"
+            );
+            if columns == 40 && help_arg == "--help" {
+                let output_details = output
+                    .split_once("Output details:")
+                    .unwrap()
+                    .1
+                    .split_once("Viewer and confirmation:")
+                    .unwrap()
+                    .0;
+                let tree_lines = output_details
+                    .lines()
+                    .skip_while(|line| !line.contains("- Tree:"))
+                    .take_while(|line| !line.contains("- Flat:"))
+                    .collect::<Vec<_>>();
+                assert!(
+                    tree_lines.len() > 1 && tree_lines[1].starts_with("  "),
+                    "Tree bullet continuation lost its indentation:\n{output_details}"
+                );
+            }
+            output_by_width.push(output);
+        }
+        assert!(
+            output_by_width[2].lines().count() < output_by_width[1].lines().count(),
+            "{help_arg} did not reflow to use the detected 120-column width"
+        );
+    }
+}
+
+#[test]
 fn pty_shows_modification_bounds_and_repeats_them_before_confirmation() {
     let root = fixture();
     let mut session = Session::start(
