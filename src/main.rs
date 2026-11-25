@@ -42,6 +42,7 @@ const HELP_STYLES: Styles = Styles::styled()
 fn help_width(stdout_is_terminal: bool, terminal_width: Option<u16>) -> usize {
     if stdout_is_terminal {
         terminal_width
+            .filter(|&width| width > 0)
             .map(usize::from)
             .unwrap_or(HELP_FALLBACK_WIDTH)
             .max(HELP_MIN_WIDTH)
@@ -53,8 +54,9 @@ fn help_width(stdout_is_terminal: bool, terminal_width: Option<u16>) -> usize {
 fn detected_help_width() -> usize {
     let stdout_is_terminal = io::stdout().is_terminal();
     let terminal_width = if stdout_is_terminal {
-        let (_, width) = console::Term::stdout().size();
-        (width > 0).then_some(width)
+        console::Term::stdout()
+            .size_checked()
+            .map(|(_, width)| width)
     } else {
         None
     };
@@ -2309,11 +2311,15 @@ mod tests {
 
     #[test]
     fn help_width_uses_terminal_columns_with_a_fallback_and_minimum() {
-        assert_eq!(super::help_width(true, Some(40)), 40);
-        assert_eq!(super::help_width(true, Some(120)), 120);
+        assert_eq!(super::help_width(true, Some(0)), 80);
         assert_eq!(super::help_width(true, Some(20)), 40);
+        assert_eq!(super::help_width(true, Some(40)), 40);
+        assert_eq!(super::help_width(true, Some(79)), 79);
+        assert_eq!(super::help_width(true, Some(80)), 80);
+        assert_eq!(super::help_width(true, Some(120)), 120);
         assert_eq!(super::help_width(true, None), 80);
         assert_eq!(super::help_width(false, Some(40)), 80);
+        assert_eq!(super::help_width(false, None), 80);
     }
 
     #[test]

@@ -3210,9 +3210,9 @@ fn redirected_help_uses_fallback_width_without_color() {
             .map(console::measure_text_width)
             .max()
             .unwrap_or(0);
-        assert!(
-            (41..=80).contains(&widest_line),
-            "{flag} did not use the redirected 80-column fallback: {widest_line}"
+        assert_eq!(
+            widest_line, 80,
+            "{flag} has an unexpected redirected output width"
         );
     }
 }

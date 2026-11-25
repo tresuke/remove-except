@@ -385,6 +385,50 @@ fn pty_help_wraps_to_detected_terminal_width() {
 }
 
 #[test]
+fn pty_help_with_unavailable_width_matches_80_columns_and_redirected_output() {
+    let root = fixture();
+    for help_arg in ["-h", "--help"] {
+        let redirected = Command::new(env!("CARGO_BIN_EXE_remove-except"))
+            .current_dir(root.path())
+            .arg(help_arg)
+            .env("TERM", "xterm")
+            .env("NO_COLOR", "1")
+            .env_remove("CLICOLOR_FORCE")
+            .output()
+            .unwrap();
+        assert!(redirected.status.success());
+        assert!(redirected.stderr.is_empty());
+        let redirected = String::from_utf8(redirected.stdout).unwrap();
+        assert!(!redirected.contains('\x1b'));
+
+        for size in [(24, 80), (0, 0), (24, 0)] {
+            let mut session =
+                Session::start_configured(root.path(), &[help_arg], false, size, |command| {
+                    command.env("NO_COLOR", "1").env_remove("CLICOLOR_FORCE");
+                });
+            session.exit_and_drain(0);
+            assert!(!session.output.contains('\x1b'));
+            assert_eq!(
+                session.output.replace("\r\n", "\n"),
+                redirected,
+                "{help_arg} output differs for PTY size {size:?}"
+            );
+        }
+
+        let mut narrower =
+            Session::start_configured(root.path(), &[help_arg], false, (24, 79), |command| {
+                command.env("NO_COLOR", "1").env_remove("CLICOLOR_FORCE");
+            });
+        narrower.exit_and_drain(0);
+        assert_ne!(
+            narrower.output.replace("\r\n", "\n"),
+            redirected,
+            "{help_arg} output did not distinguish 79 and 80 columns"
+        );
+    }
+}
+
+#[test]
 fn pty_shows_modification_bounds_and_repeats_them_before_confirmation() {
     let root = fixture();
     let mut session = Session::start(
