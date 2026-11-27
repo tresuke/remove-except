@@ -185,6 +185,8 @@ Open a new shell and try typing `remove-except --pa` or `remove-except --pager a
 
 ### Safety Guards
 
+This feature is in the development version and is not included in the published `v0.5.1`.
+
 `--require-match` and `--max-delete-items <N>` apply only when explicitly specified.
 
 - `--require-match` rejects deletion when the direct keep-match count, excluding required ancestor directories, is zero. It also applies when there are no deletion targets.
@@ -200,6 +202,8 @@ Dry runs report guard violations, but a violation does not itself change the exi
 On a guard violation, normal and `--force` runs report the violations and rejection on stderr, skip the human-readable preview, viewer, confirmation, and deletion, and exit 3. Human-readable mode writes nothing to stdout on rejection; JSON mode still writes the pre-deletion plan and guard information. The guards evaluate plan-time counts only and do not protect against or detect filesystem changes after planning.
 
 ### Shared Time and Size Rules
+
+The published `v0.5.1` supports modification-time filters but not file-size filters.
 
 Multiple patterns use OR semantics; every specified modification-time and file-size bound must also match. If either kind of filter is active, only regular files matching at least one supplied pattern (if any) and every active bound can directly match. Directories, symlinks, and special files cannot directly match. Ancestor directories of directly matched files are kept even when the directories themselves do not match a pattern.
 
@@ -227,6 +231,8 @@ Without an offset, the `TZ` environment variable selects the local zone when set
 Times are compared without rounding. See the shared rules for metadata failures and Windows reparse points.
 
 ### Keeping by File Size
+
+This feature is in the development version and is not included in the published `v0.5.1`.
 
 ```sh
 remove-except --dry-run --size-at-least 1048576
