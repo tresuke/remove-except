@@ -2,6 +2,8 @@
 
 This guide is the English translation of [DEVELOPMENT.ja.md](DEVELOPMENT.ja.md), the primary development guide. It covers repository development, validation, manual fixtures, the public library API, releases, and performance measurements. User-facing CLI behavior is documented in [README.ja.md](README.ja.md) and [README.md](README.md).
 
+**Read by task:** [Run and validate](#run-and-validate) · [CodeQL](#codeql) · [Manual fixtures](#manual-fixtures) · [Public library API](#public-library-api) · [Releases](#preparing-and-publishing-a-release) · [Performance](#performance-benchmarks)
+
 ## Project Structure
 
 - `src/main.rs`: CLI argument parsing, stdin pattern input, plan display (human-readable and JSON), confirmation, deletion, and exit codes.
@@ -98,7 +100,7 @@ CodeQL does not replace tests, Clippy, `cargo audit`, or deletion-specification 
 
 ## Manual Fixtures
 
-`Prepare-Manual-Test.ps1` and `prepare-manual-test.sh` create fixtures in `manual-test-workspace`. Run the platform-appropriate script from the repository root, then enter the fixture directory and run the CLI with `--manifest-path`:
+`Prepare-Manual-Test.ps1` and `prepare-manual-test.sh` create or overwrite known fixture files in `manual-test-workspace`. Make sure you have no work files there that need to be kept before running either script. Run the platform-appropriate script from the repository root, then enter the fixture directory and run the CLI with `--manifest-path`:
 
 ```powershell
 .\Prepare-Manual-Test.ps1
@@ -114,7 +116,7 @@ cargo run --manifest-path ../Cargo.toml -- --dry-run keep.txt keep '*.md'
 
 The preview should keep `keep.txt`, `release-notes.md`, and the `keep` directory and its contents. Other items are deletion targets. To try a real deletion, omit `--dry-run`, review the full plan, and answer `n` to cancel. After a deletion, return to the repository root and rerun the fixture script.
 
-The scripts create or overwrite known fixture files. They replace `keep-link` only when it is the expected symbolic link to `keep.txt`; they do not delete unrelated files or links. If a regular file or a different link conflicts with `keep-link`, they report an error. Use `-Path` in PowerShell or the optional output-path argument in Bash to create fixtures elsewhere. On Windows, creating symbolic links may require Developer Mode or administrator privileges. When running from a custom fixture location, pass the absolute path to the repository's `Cargo.toml` using `--manifest-path`.
+The scripts replace `keep-link` only when it is the expected symbolic link to `keep.txt`; they do not delete unrelated files or links. If a regular file or a different link conflicts with `keep-link`, they report an error. Use `-Path` in PowerShell or the optional output-path argument in Bash to create fixtures elsewhere. On Windows, creating symbolic links may require Developer Mode or administrator privileges. When running from a custom fixture location, pass the absolute path to the repository's `Cargo.toml` using `--manifest-path`.
 
 ## Public Library API
 
@@ -122,7 +124,7 @@ The [API documentation for the latest published version](https://docs.rs/remove-
 
 It returns an error for missing or empty patterns, invalid globs, absolute patterns outside the selected directory, parent traversal, filesystem roots, non-directory roots, Windows drive-relative paths, and roots that cannot be resolved. Input validation errors can be identified with `anyhow::Error::downcast_ref::<ValidationError>()`; filesystem errors during scanning are not `ValidationError`s. `.` and `./` represent the selected root and keep everything beneath it.
 
-Read `RemovalPlan` and `PlannedItem` through their getters. They return references; plan contents cannot be mutated through them. Code that used public fields should migrate to getter calls.
+Read `RemovalPlan` and `PlannedItem` through their getters. Getters that return references do not allow plan contents to be mutated. `direct_match_count()` returns a `usize`, and `item_type()` returns an `ItemType` by value. Code that used public fields should migrate to getter calls.
 
 ```rust,no_run
 use remove_except::build_plan;
@@ -139,7 +141,8 @@ for item in plan.delete_roots() {
 `RemovalPlan` getters:
 
 - `root()`: Normalized processing directory.
-- `direct_match_count()`: Number of items directly matched by patterns.
+- `direct_match_count()`: Number of items directly matching all specified keep conditions, including any patterns; required ancestors are not counted.
+- `modified_range()` / `size_range()`: The modification-time / file-size range used to create the plan, or `None` when unspecified.
 - `keep_items()`: Kept items, including required ancestors, sorted by relative path.
 - `delete_items()`: All deletion targets, sorted by relative path.
 - `delete_roots()`: Top-level items passed to deletion; descendants of deleted directories are excluded.
@@ -147,6 +150,8 @@ for item in plan.delete_roots() {
 `PlannedItem` exposes `path()`, `relative_path()`, and `item_type()`. Relative paths use `/` separators. `path()` returns an absolute path below the normalized root; on Windows it may include the standard library's `\\?\` extended-path prefix.
 
 The scan does not follow symbolic links. The CLI deletes `delete_roots` after plan creation. A deletion error does not restore items already removed.
+
+`build_plan(root, patterns)` requires at least one pattern and does not accept time or size filters. Use `build_plan_with_options(root, patterns, options)` to apply modification-time or file-size bounds, including when no patterns are supplied. It requires at least one pattern or time/size bound. With an active time or size filter, only regular files matching every keep condition directly match. Without those filters, non-file items can also match patterns directly. The API may differ in published versions; check the API documentation for the version you use.
 
 ## Preparing and Publishing a Release
 
@@ -156,13 +161,31 @@ GitHub source/binary Releases and crates.io are separate distribution channels. 
 
 ### Ordered Release Procedure
 
-Steps 1–4 are common. Perform steps 5–6 only when a GitHub Release is in scope, and step 7 only when crates.io is in scope. If both are selected, perform steps 5–7 in order. In step 8, verify only the selected distribution channels. Record each gate's result, relevant commits/tags, workflow runs, Release/crate URLs, and any open items in the release preparation PR. Also record the actual source commit for each channel. If the GitHub Release tag commit differs from the crate source commit, record the difference and reason, verify there are no unintended code changes, and record approval for any intentional differences. Record each check as passed, failed, not run, or not applicable, with a reason. Do not treat not-applicable checks as passed; unresolved failures or unrun required checks block the next publication gate. Do not waive checks required by repository policy. For individually permissible decisions, such as an alternative to an explicitly requested review condition, record the scope, reason, and approval.
+| Stage | Steps |
+| --- | --- |
+| Common preparation | 1–4 |
+| GitHub Release | 5–6, when selected |
+| crates.io | 7, when selected |
+| Post-publication verification | 8, for the selected channels |
+
+Record each stage's results in the release preparation PR:
+
+- Record commits/tags, workflow runs, Release/crate URLs, and open items. Also record the actual source commit for each channel.
+- If the GitHub Release tag commit differs from the crate source commit, record the difference and reason, verify there are no unintended code changes, and record approval for any intentional differences.
+- Classify each check as passed, failed, not run, or not applicable, with a reason. Do not treat not-applicable checks as passed.
+- Unresolved failures or unrun required checks block the next publication gate. Do not waive checks required by repository policy.
+- For individually permissible decisions, such as an alternative to an explicitly requested review condition, record the scope, reason, and approval.
 
 1. **Freeze the contents and distribution scope.** Review the changes since the last formal release and select a version under the 0.x rules. Decide separately whether to provide a GitHub Release using the Prepare Release workflow (GitHub source archives and Windows x64/Linux x64 binaries) and a crates.io package. Assess whether any change affects keep/delete decisions, deletion results, safety, or compatibility.
 
-   If a change is made after the contents are frozen, reassess the affected channels and gates and repeat only the relevant checks. For documentation-only changes, recheck the documentation and package contents; for code, test, or build-environment changes, repeat the affected reviews and validation. Changes to the version, channels, or release scope require renewed approval. After tagging, assess impact per channel and do not change existing tags or published artifacts. If an existing binary must change, decide whether to use a new version/tag or cancel publication. For an unpublished crate, check its difference from the tag commit, reason, code changes, approval scope, and package validation before deciding whether it can be published from a separate clean commit. Publishing the same version from a different commit is limited to differences within the approved scope and consistent with versioning policy. Reassess the version and cross-channel consistency for code differences; stop until required approvals and validation are complete.
+   If a change is made after the contents are frozen, reassess the affected channels and gates and repeat only the relevant checks.
 
-2. **Finalize documentation included in the distributions.** Treat `README.ja.md` as the source of truth and synchronize `README.md`; review release notes, tag-install commands, archive names, and crates.io instructions. **Prepare Release checks out the tag's two READMEs and copies them into the binary archives; Cargo includes the `README.md` from the source used to publish the crate. A post-publication edit on main does not update either an existing archive or a published crate.** Therefore merge documentation needed by a distribution before tagging or crate publication. Avoid time-sensitive claims that become false after publication; prefer version-neutral installation instructions that remain accurate both before and after a release.
+   - For documentation-only changes, recheck the documentation and package contents. For code, test, or build-environment changes, repeat the affected reviews and validation.
+   - Changes to the version, channels, or release scope require renewed approval.
+   - After tagging, assess impact per channel and do not change existing tags or published artifacts. If an existing binary must change, decide whether to use a new version/tag or cancel publication.
+   - For an unpublished crate, check its difference from the tag commit, reason, code changes, approval scope, and package validation before deciding whether it can be published from a separate clean commit. Publishing the same version from a different commit is limited to differences within the approved scope and consistent with versioning policy.
+   - Reassess the version and cross-channel consistency for code differences; stop until required approvals and validation are complete.
+2. **Finalize documentation included in the distributions.** Treat `README.ja.md` as the source of truth and synchronize `README.md`; review release notes, tag-install commands, archive names, and crates.io instructions. Update development-version labels and version-specific availability notes so they accurately describe the target tag. **Prepare Release checks out the tag's two READMEs and copies them into the binary archives; Cargo includes the `README.md` from the source used to publish the crate. A post-publication edit on main does not update either an existing archive or a published crate.** Therefore merge documentation needed by a distribution before tagging or crate publication. Avoid time-sensitive claims that become false after publication; prefer version-neutral installation instructions that remain accurate both before and after a release.
 3. **Merge the version/release PR.** Update only the root package versions in `Cargo.toml` and `Cargo.lock`; include finalized user documentation and developer release notes as needed. Merge after required CI and reviews pass, then verify Rust CI and CodeQL on the resulting `main`. If an explicitly requested review condition cannot be met, do not substitute silently; report the limitation and options and stop. Proceed with an alternative only after explicit user approval. When the release contents add or change environment-dependent code or tests, including OS-specific behavior or dependencies on time zones, external data, or build tools, run and record affected checks in the relevant release environment before tagging. Documentation-only changes do not require full environment testing for this reason. If publishing a crate, also verify the package inventory and dry run before creating a tag.
 4. **Tag the finalized `main` commit.** Confirm the version tag is unused, `main` is current and its CI passes, and the package version matches the intended tag. Create and push an annotated tag only after explicit approval. Never move or reuse a published tag.
 
