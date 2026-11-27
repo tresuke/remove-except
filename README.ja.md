@@ -28,30 +28,30 @@
 
 ### ビルド済みバイナリー
 
-`v0.5.1` の [GitHub Release](https://github.com/tresuke/remove-except/releases/tag/v0.5.1) では、Windows x64／Linux x64 向けのビルド済みバイナリーを提供しています。以前の `v0.2.4` リリースはソースコードのみを提供します。
+`v0.6.0` の [GitHub Release](https://github.com/tresuke/remove-except/releases/tag/v0.6.0) では、Windows x64／Linux x64 向けのビルド済みバイナリーを提供しています。以前の `v0.2.4` リリースはソースコードのみを提供します。
 
-`v0.5.1` では更新日時オプションとJSON schema 2を利用できます。これらは `v0.4.0` には含まれません。
+`v0.6.0` ではファイルサイズ条件、任意指定の削除安全ガード、Bash／PowerShell 用の静的な補完スクリプトを追加し、端末幅に応じたヘルプ表示にも対応します。`v0.5.1` では更新日時オプションとJSON schema 2を利用できますが、これらの追加機能は含まれません。
 
 アーカイブとチェックサムは、GitHub Release の **Assets** から取得してください。
 
 | 対象 | アーカイブ | SHA-256 ファイル |
 | --- | --- | --- |
-| Windows x64（MSVC） | `remove-except-v0.5.1-x86_64-pc-windows-msvc.zip` | `remove-except-v0.5.1-x86_64-pc-windows-msvc.zip.sha256` |
-| Linux x64（GNU） | `remove-except-v0.5.1-x86_64-unknown-linux-gnu.tar.gz` | `remove-except-v0.5.1-x86_64-unknown-linux-gnu.tar.gz.sha256` |
+| Windows x64（MSVC） | `remove-except-v0.6.0-x86_64-pc-windows-msvc.zip` | `remove-except-v0.6.0-x86_64-pc-windows-msvc.zip.sha256` |
+| Linux x64（GNU） | `remove-except-v0.6.0-x86_64-unknown-linux-gnu.tar.gz` | `remove-except-v0.6.0-x86_64-unknown-linux-gnu.tar.gz.sha256` |
 
 Linux版は Ubuntu 22.04 内でビルドし、glibc 2.35 以降が必要です。サポートする Linux 環境は Ubuntu であり、glibc の条件だけで他のディストリビューションとの互換性を保証するものではありません。macOS、ARM64、musl 向けバイナリーは含みません。ビルド済みバイナリーの利用に Rust toolchain は不要です。
 
 展開・実行前に、アーカイブの SHA-256 を確認してください。Windows では `Get-FileHash` のハッシュとチェックサムファイルの先頭の値を、大文字と小文字を区別せず比較します。一致しない場合は先へ進まないでください。
 
 ```powershell
-Get-FileHash .\remove-except-v0.5.1-x86_64-pc-windows-msvc.zip -Algorithm SHA256
-Get-Content .\remove-except-v0.5.1-x86_64-pc-windows-msvc.zip.sha256
+Get-FileHash .\remove-except-v0.6.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256
+Get-Content .\remove-except-v0.6.0-x86_64-pc-windows-msvc.zip.sha256
 ```
 
 Ubuntu ではアーカイブとチェックサムを同じディレクトリーに置き、次を実行します。
 
 ```sh
-sha256sum --check remove-except-v0.5.1-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum --check remove-except-v0.6.0-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
 GitHub Actions のビルド来歴証明も GitHub CLI で確認してください。`<archive-path>` は取得したアーカイブのパスに置き換えます。
@@ -65,24 +65,24 @@ gh attestation verify <archive-path> --repo tresuke/remove-except --signer-workf
 検証後、アーカイブを展開します。
 
 ```powershell
-Expand-Archive -LiteralPath .\remove-except-v0.5.1-x86_64-pc-windows-msvc.zip -DestinationPath .\remove-except-v0.5.1
+Expand-Archive -LiteralPath .\remove-except-v0.6.0-x86_64-pc-windows-msvc.zip -DestinationPath .\remove-except-v0.6.0
 ```
 
 ```sh
-tar -xzf remove-except-v0.5.1-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf remove-except-v0.6.0-x86_64-unknown-linux-gnu.tar.gz
 ```
 
 各アーカイブには、対象名を含むディレクトリー内に `remove-except.exe`（Windows）または `remove-except`（Ubuntu）、両 README、両プロジェクトライセンスが入っています。実行ファイルがあるディレクトリーを `PATH` に追加し、`remove-except --version` で確認してください。
 
 ### ソースからのインストール
 
-Rust 1.88 以降を用意し、公開済みの `v0.5.1` タグを指定してインストールします。
+Rust 1.88 以降を用意し、公開済みの `v0.6.0` タグを指定してインストールします。
 
 ```sh
-cargo install --git https://github.com/tresuke/remove-except --tag v0.5.1 --locked
+cargo install --git https://github.com/tresuke/remove-except --tag v0.6.0 --locked
 ```
 
-開発版を利用する場合は、タグを指定せず、既定ブランチの最新ソースからインストールします。公開済みの `v0.5.1` とは内容が異なる場合があります。
+既定ブランチの最新ソースからインストールする場合は、タグを省略します。公開済みの `v0.6.0` にない変更が含まれる場合があります。
 
 ```sh
 cargo install --git https://github.com/tresuke/remove-except --locked
@@ -128,7 +128,7 @@ remove-except --root work --dry-run keep.txt '**/*.md'
 
 ## オプション一覧
 
-このREADMEはリポジトリーの開発版を説明します。公開済み `v0.5.1` では「開発版」と記した機能を利用できません。開発版も公開版と同じ `--version` を表示する場合があります。利用中のビルドで使えるオプションは `remove-except --help` で確認してください。ヘルプは機能の有無を示しますが、実行ファイルの出所を証明するものではありません。公開済み `v0.5.1` の仕様は[その版のREADME](https://github.com/tresuke/remove-except/blob/v0.5.1/README.ja.md)を参照してください。
+このREADMEはリポジトリー内のソースを説明します。`v0.6.0` タグにはこの版の動作が含まれますが、その後の既定ブランチの変更は異なる場合があります。開発ビルドも公開ビルドと同じ `--version` を表示する場合があります。利用中のビルドで使えるオプションは `remove-except --help` で確認してください。ヘルプは機能の有無を示しますが、実行ファイルの出所を証明するものではありません。公開済み `v0.6.0` の正確な動作は[その版のREADME](https://github.com/tresuke/remove-except/blob/v0.6.0/README.ja.md)を参照してください。
 
 | オプション | 説明 |
 | --- | --- |
@@ -137,18 +137,18 @@ remove-except --root work --dry-run keep.txt '**/*.md'
 | `-n`, `--dry-run` | 削除せず、保持項目と削除対象を表示します（[確認の流れ](#表示と実行)）。 |
 | `-f`, `--force` | 確認プロンプトを省略します。検証や安全ガードは省略しません（[確認の流れ](#表示と実行)）。 |
 | `--patterns-from-stdin` | 標準入力から保持パターンを1行に1個ずつ読み込み、位置引数のパターンとORで組み合わせます（[詳細](#標準入力からのパターン)）。 |
-| `--require-match`（開発版） | 保持条件に直接一致する項目が0件の場合、削除を拒否します（[安全ガード](#安全ガード)）。 |
-| `--max-delete-items <N>`（開発版） | 削除対象項目数を制限します（[安全ガード](#安全ガード)）。 |
+| `--require-match` | 保持条件に直接一致する項目が0件の場合、削除を拒否します（[安全ガード](#安全ガード)）。 |
+| `--max-delete-items <N>` | 削除対象項目数を制限します（[安全ガード](#安全ガード)）。 |
 | `--modified-since <DATE_TIME>` | 更新日時の開始境界（以上、[詳細](#更新日時による保持)）。 |
 | `--modified-before <DATE_TIME>` | 更新日時の終了境界（未満、[詳細](#更新日時による保持)）。 |
-| `--size-at-least <BYTES>`（開発版） | 論理ファイルサイズの開始境界（バイト数、以上、[詳細](#ファイルサイズによる保持)）。 |
-| `--size-below <BYTES>`（開発版） | 論理ファイルサイズの終了境界（バイト数、未満、[詳細](#ファイルサイズによる保持)）。 |
+| `--size-at-least <BYTES>` | 論理ファイルサイズの開始境界（バイト数、以上、[詳細](#ファイルサイズによる保持)）。 |
+| `--size-below <BYTES>` | 論理ファイルサイズの終了境界（バイト数、未満、[詳細](#ファイルサイズによる保持)）。 |
 | `--format <FORMAT>` | 計画の出力形式。`human`（既定）または `json` を指定します（[JSON出力](#json出力)）。 |
 | `--pager <MODE>` | 内蔵ビューアー。`auto`（既定）、`always`、`never`。`always` はJSON・`--force` と併用できません（[詳細](#大量項目の閲覧)）。 |
 | `--layout <LAYOUT>` | 表示形式。`tree`（既定）または `flat`（[詳細](#レイアウト)）。 |
 | `--sort-by-type` | Flat表示専用。Directory、File、Symlinkの順に並べます（[詳細](#レイアウト)）。 |
 | `--summary <SECTION>` | `keep`、`delete`、`both` の選択した節はパスを省略して件数を表示します（[詳細](#凡例とサマリー)）。 |
-| `--generate-completion <SHELL>`（開発版） | `bash` または `powershell` 用の静的な補完スクリプトを標準出力へ出力します（[詳細](#シェル補完)）。 |
+| `--generate-completion <SHELL>` | `bash` または `powershell` 用の静的な補完スクリプトを標準出力へ出力します（[詳細](#シェル補完)）。 |
 | `-h`, `--help` | ヘルプを表示します。 |
 | `-V`, `--version` | バージョンを表示します。 |
 
@@ -157,8 +157,6 @@ remove-except --root work --dry-run keep.txt '**/*.md'
 ### シェル補完
 
 Windows では `remove-except` と `remove-except.exe` のどちらのコマンド名でも補完できます。
-
-`remove-except --help` に `--generate-completion` が表示されるビルドが必要です。公開済み `v0.5.1` のタグ、配布バイナリー、crateにはこの機能は含まれません。
 
 標準出力にはスクリプトだけを書き出し、標準入力の読み取り、削除計画の作成、ファイル操作は行いません。成功時は終了コード `0`、書き出しに失敗した場合は `1`、不正な引数やシェル名は `2` です。保持パターンや `--force` などの実行用オプションとは併用できません。末尾の `--` だけなら受理しますが、その後に保持パターンがある場合は受理しません。有効な補完指定とともに `-h`／`--help` または `-V`／`--version` がオプションとして解釈された場合は、clap 標準の動作でヘルプまたはバージョンだけを表示し、スクリプトは生成せず終了コード `0` で終了します。
 
@@ -185,8 +183,6 @@ Remove-Variable removeExceptCompletion
 
 ### 安全ガード
 
-この機能は開発版のものです。公開済み `v0.5.1` には含まれません。
-
 `--require-match`と`--max-delete-items <N>`は明示指定時だけ削除計画へ適用します。
 
 - `--require-match`は、祖先ディレクトリーを除いた保持条件の直接一致件数が0件の場合に削除を拒否します。削除対象が0件でも適用されます。
@@ -203,7 +199,7 @@ Remove-Variable removeExceptCompletion
 
 ### 日時・サイズ条件の共通ルール
 
-公開済み `v0.5.1` は更新日時条件に対応していますが、ファイルサイズ条件には対応していません。
+`v0.6.0` は更新日時とファイルサイズの両方の条件に対応します。`v0.5.1` は更新日時条件だけに対応します。
 
 パターンは複数指定するとOR条件になり、指定した各日時・サイズ境界はすべて満たす必要があります。どちらかの条件を使うと、指定したパターン（あればそのいずれか）とすべての境界に一致する通常ファイルだけが直接一致します。ディレクトリー、シンボリックリンク、特殊ファイルは直接一致しません。直接一致したファイルの祖先ディレクトリーは、祖先自身がパターンに一致しなくても保持されます。
 
@@ -231,8 +227,6 @@ remove-except --dry-run --modified-since '2026-11-10T09:00+09:00' '**/*.log'
 日時は丸めず比較します。計画とメタデータに関する共通の注意は[日時・サイズ条件の共通ルール](#日時サイズ条件の共通ルール)を参照してください。
 
 ### ファイルサイズによる保持
-
-この機能は開発版のものです。公開済み `v0.5.1` には含まれません。
 
 ```sh
 remove-except --dry-run --size-at-least 1048576
@@ -497,7 +491,7 @@ $OutputEncoding = $utf8
 
 `--format json` を指定すると、削除前の計画をJSONオブジェクト1個として標準出力に出力します。状態ラベル、凡例、色、警告は含みません。警告、確認プロンプト、`Aborted.`、`Removal complete.` などのメッセージは標準エラーに出力します。
 
-以下は開発版の出力です。公開済み `v0.5.1` もschema 2ですが、`guards`、`guard_violations`、`selection` 内の `size_at_least`／`size_below` は含みません。[その版のJSON仕様](https://github.com/tresuke/remove-except/blob/v0.5.1/README.ja.md#json出力)を参照してください。
+`v0.6.0` はschema 2を使い、安全ガードの設定・違反と `selection` 内のファイルサイズ境界を含みます。公開済み `v0.5.1` もschema 2ですが、これらのフィールドは含みません。[その版のJSON仕様](https://github.com/tresuke/remove-except/blob/v0.5.1/README.ja.md#json出力)を参照してください。
 
 ```json
 {
@@ -580,6 +574,13 @@ dry-runのガード違反そのものは終了コードを変えません。JSON
 削除中にエラーが起きた場合（終了コード1）、それ以前に削除済みの項目は元に戻りません。
 
 ## バージョンと互換性
+
+### v0.5.1 から v0.6.0 への更新
+
+- `--size-at-least` と `--size-below` で任意のファイルサイズ条件を指定できます。指定すると通常ファイルの直接一致と保持・削除対象が変わる場合があります。指定しない場合はサイズ条件を追加しません。
+- `--require-match` と `--max-delete-items <N>` は任意指定の安全ガードです。選択したガード設定に違反する計画を拒否し、`--force` でも迂回できません。
+- `--generate-completion <SHELL>` で Bash と PowerShell の静的補完スクリプトを生成できます。ヘルプは端末幅に応じて表示します。
+- 最低Rustバージョンは1.88、対応OSはWindowsとUbuntuのままです。削除前に `--summary` なしの `--dry-run` で全計画を確認してください。
 
 ### v0.4.0 から v0.5.1 への更新
 
